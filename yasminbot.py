@@ -76,39 +76,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الكلمة 32': 'الرد هنا 32',
         'الكلمة 33': 'الرد هنا 33',
         'الكلمة 34': 'الرد هنا 34',
-        'الكلمة 35': 'الرد here 35',
+        'الكلمة 35': 'الرد هنا 35',
     }
     
+    # الفحص الأول: لو الكلمة في المحفوظات، ردي عادي طوالي واقفي هنا
     if user_text in auto_replies:
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ثانياً: تحويل الرسالة للذكاء الاصطناعي جيميناي باسم ياسمين] ===
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=user_text,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    'أنت بوت تليجرام ذكي وسريع اسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
-                    'هو المبرمج أحمد. إذا سألك أي شخص من صنعك، من طورك، أو من مبرمجك، '
-                    'أخبره بفخر وثقة أن أحمد هو صانعك ومطورك، ولا تذكر جوجل إلا إذا سُئلت '
-                    'عن التقنية المشغلة لذكائك فقط. رد دائماً بلهجة ودودة ومحترمة ومختصرة بالعامية السودانية.'
+    # الفحص الثاني: لو الكلمة ماف في المحفوظات، بنشوف شرط العلامة المنقوطة (;)
+    if user_text.startswith(';'):
+        # هنا بنشيل العلامة المنقوطة من البداية عشان نرسل الكلام النظيف للذكاء الاصطناعي
+        cleaned_text = user_text[1:].strip()
+        
+        # لو الزول رسل العلامة براها بدون كلام، اسكتي
+        if not cleaned_text:
+            return
+            
+        # === [ثانياً: تحويل الرسالة المفلترة للذكاء الاصطناعي جيميناي باسم ياسمين] ===
+        try:
+            response = ai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=cleaned_text,
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        'أنت بوت تليجرام ذكي وسريع اسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
+                        'هو المبرمج أحمد. إذا سألك أي شخص من صنعك، من طورك، أو من مبرمجك، '
+                        'أخبره بفخر وثقة أن أحمد هو صانعك ومطورك، ولا تذكر جوجل إلا إذا سُئلت '
+                        'عن التقنية المشغلة لذكائك فقط. رد دائماً بلهجة ودودة ومحترمة ومختصرة بالعامية السودانية.'
+                    )
                 )
             )
-        )
-        if response.text:
-            await update.message.reply_text(response.text)
-        else:
-            await update.message.reply_text("عذراً، لم أستطع فهم الرسالة، جرب صياغتها بطريقة أخرى.")
-        
-    except Exception as e:
-        print(f"حدث خطأ في الاتصال بجوجل: {e}")
-        await update.message.reply_text("عذراً، السيرفر مضغوط ثواني، جرب أرسل تاني!")
+            if response.text:
+                await update.message.reply_text(response.text)
+            else:
+                await update.message.reply_text("عذراً، لم أستطع فهم الرسالة، جرب صياغتها بطريقة أخرى.")
+            
+        except Exception as e:
+            print(f"حدث خطأ في الاتصال بجوجل: {e}")
+            await update.message.reply_text("عذراً، السيرفر مضغوط ثواني، جرب أرسل تاني!")
+    else:
+        # لو مافيها العلامة وماف في المحفوظات، خلي البوت ساكت تماماً وما يعمل أي حاجة
+        return
 
 # 4. تشغيل وتدوير البوت
 if __name__ == '__main__':
-    print("البوت بدأ الشغل بنجاح واستقرار باسم ياسمين.. 🚀")
+    print("البوت بدأ الشغل بنجاح واستقرار مع فلتر العلامة (;) باسم ياسمين.. 🚀")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
