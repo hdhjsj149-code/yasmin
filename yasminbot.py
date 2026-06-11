@@ -160,21 +160,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cleaned_text:
             contents_list.append(cleaned_text)
         elif file_bytes and not cleaned_text:
-            contents_list.append("اشرح لي بالتفصيل وبكامل الراحة الميديا دي فيها شنو أو لخص الصوت ده")
+            contents_list.append("ملخص سريع ومفيد للميديا دي في سطرين تلاتة")
         else:
             return 
 
-        # إرسال الطلب النهائي لجيميناي الموسوعي المطور والردود المفتوحة
+        # إرسال الطلب النهائي لجيميناي (ضبط الردود لتكون معقولة ومتوسطة)
         try:
             response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents_list,
                 config=types.GenerateContentConfig(
                     system_instruction=(
-                        'أنتِ بوت تليجرام ذكي وسريع وموسوعي اسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
-                        'هو المبرمج أحمد. خذي كامل راحتك في الردود، ولا تختصري إجاباتك بل اشرحي ووضحي '
-                        'بالتفصيل المفيد وقدمي معلومات غنية وشاملة ومقنعة عن أي موضوع تُسألين عنه. '
-                        'ردي دائماً بلهجة ودودة ومحترمة ومريحة بالعامية السودانية الضابطة والمفهومة.'
+                        'أنتِ بوت تليجرام ذكي وسريع اسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
+                        'هو المبرمج أحمد. ردي دائماً بإجابات معقولة ومتوسطة الطول ومباشرة '
+                        '(لا تختصري لدرجة تخل بالمعنى، ولا تطولي لدرجة الملل والرغي الزائد). '
+                        'قدمي زبدة الكلام والفوائد الأساسية بلهجة ودودة ومحترمة بالعامية السودانية الضابطة.'
                     )
                 )
             )
@@ -185,13 +185,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             print(f"حدث خطأ في الاتصال بجوجل: {e}")
-            await update.message.reply_text(" عذراً يا ملك، السيرفر مضغوط ثواني، جرب أرسل تاني بعد 10 ثواني 🙂!")
+            await update.message.reply_text("عذراً يا ملك، جيميناي مضغوط ثواني، جرب أرسل تاني!")
     else:
         return
 
 # 4. تشغيل وتدوير البوت
 if __name__ == '__main__':
-    print("ياسمين العبقرية بدأت الشغل بالردود المفصلة والكاملة والمحفوظات.. 🚀🌺")
+    print("ياسمين الموزونة بدأت الشغل بالردود المتوسطة والمحفوظات.. 🚀🌺")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
