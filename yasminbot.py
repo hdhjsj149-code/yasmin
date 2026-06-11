@@ -1,4 +1,4 @@
-mportt os
+import os
 import threading
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
