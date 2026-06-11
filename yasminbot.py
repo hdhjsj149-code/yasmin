@@ -185,7 +185,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             print(f"حدث خطأ في الاتصال بجوجل: {e}")
-            await update.message.reply_text("عذراً يا ملك، جيميناي مضغوط ثواني، جرب أرسل تاني!")
+            await update.message.reply_text("عذراً يا ملك، السيرفر مضغوط ثواني، جرب أرسل تاني!")
     else:
         return
 
