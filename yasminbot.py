@@ -121,77 +121,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mime_type = None
         file_bytes = None
         
+        # تحديد الرسالة المستهدفة (سواء الحالية أو الـ اترد عليها)
         target_message = update.message
         if update.message.reply_to_message:
             target_message = update.message.reply_to_message
 
-        # فحص وتحميل الصور والريكوردات الخفيفة بحذر عشان السيرفر ما يقع
-        try:
-            if target_message.photo:
-                file_id = target_message.photo[-1].file_id
-                mime_type = "image/jpeg"
-            elif target_message.voice:
-                file_id = target_message.voice.file_id
-                mime_type = "audio/ogg"
-            elif target_message.audio:
-                file_id = target_message.audio.file_id
-                mime_type = "audio/mpeg"
-            else:
-                file_id = None
+        # فحص الميديا بشكل معزول تماماً عشان ما يعطل النص
+        if target_message.photo or target_message.voice or target_message.audio:
+            try:
+                if target_message.photo:
+                    file_id = target_message.photo[-1].file_id
+                    mime_type = "image/jpeg"
+                elif target_message.voice:
+                    file_id = target_message.voice.file_id
+                    mime_type = "audio/ogg"
+                elif target_message.audio:
+                    file_id = target_message.audio.file_id
+                    mime_type = "audio/mpeg"
+                else:
+                    file_id = None
 
-            if file_id:
-                tg_file = await context.bot.get_file(file_id)
-                # حماية السيرفر: لو الملف أكبر من 5 ميجا بايت ارفض عشان السيرفر ما ينهج
-                if tg_file.file_size > 5 * 1024 * 1024:
-                    await update.message.reply_text("الملف ده حجمه كبير شديد على السيرفر المجاني يا غالي! 😅")
-                    return
-                
-                out = io.BytesIO()
-                await tg_file.download_to_memory(out)
-                file_bytes = out.getvalue()
-                
-                contents_list.append(
-                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-                )
+                if file_id:
+                    tg_file = await context.bot.get_file(file_id)
+                    # حماية السيرفر من الملفات الضخمة
+                    if tg_file.file_size <= 6 * 1024 * 1024:
+                        out = io.BytesIO()
+                        await tg_file.download_to_memory(out)
+                        file_bytes = out.getvalue()
+                        contents_list.append(
+                            types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+                        )
+            except Exception as e:
+                print(f"خطأ ميديا عابر: {e}")
 
-        except Exception as e:
-            print(f"خطأ ميديا خفيف: {e}")
-            # بنتجاوز الخطأ ونخلي البوت يكمل بالنص بس بدل ما يعلق
-
+        # إضافة النص النظيف للطلب
         if cleaned_text:
             contents_list.append(cleaned_text)
         elif file_bytes and not cleaned_text:
-            contents_list.append("أعطني ملخص سريع ومفيد للميديا دي")
+            contents_list.append("ملخص سريع ومفيد للميديا دي")
         else:
             return 
 
-        # إرسال الطلب النهائي الخفيف والسريع لجيميناي
+        # إرسال الطلب لجيميناي (تعليمات صارمة بخصوص طول الرد)
         try:
             response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents_list,
                 config=types.GenerateContentConfig(
                     system_instruction=(
-                        'أنتِ بوت تليجرام سريع اسمك ياسمين، صانعك ومطورك هو المبرمج أحمد. '
-                        'ردي دائماً بإجابات معقولة، مباشرة، ومتوسطة الطول وبدون رغي زائد. '
-                        'استخدمي العامية السودانية الودودة والمفهومة دائماً.'
+                        'أنتِ بوت تليجرام ذكي وسريع اسمك ياسمين، صانعك ومطورك هو المبرمج أحمد. '
+                        'ردي دائماً بإجابات معقولة ومباشرة ومتوسطة الطول (فقرة واحدة أو سطرين تلاتة بالكتير). '
+                        'ممنوع الرغي الزائد وممنوع الاختصار الشديد، اعطي زبدة الكلام دائماً بالعامية السودانية.'
                     )
                 )
             )
             if response.text:
                 await update.message.reply_text(response.text)
             else:
-                await update.message.reply_text("سمعت وشفت، بس ما قدرت أطلع نص واصح!")
+                await update.message.reply_text("سمعتك يا غالي، بس ما قدرت أطلع رد واضح، أرسل تاني.")
             
         except Exception as e:
-            print(f"جيميناي تايم آوت: {e}")
-            await update.message.reply_text("عطل خفيف في الشبكة، أرسل رسالتك تاني هسة حترد!")
+            print(f"خطأ جيميناي: {e}")
+            await update.message.reply_text("السيرفر هسي رايق، أرسل رسالتك تاني حترد طوالي!")
     else:
         return
 
 # 4. تشغيل وتدوير البوت
 if __name__ == '__main__':
-    print("ياسمين السريعة والمحمية بدأت الشغل.. 🚀🌺")
+    print("ياسمين المظبوطة رجعت للخدمة بنجاح واستقرار.. 🚀🌺")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
