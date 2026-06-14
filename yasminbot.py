@@ -41,25 +41,24 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = 7601281598  # 🚨 ضع رقم حسابك هنا (أرقام فقط)
 
-# 🔑 سحب لستة المفاتيح المتعددة من السيرفر لتأمين عدم التوقف
+# 🔑 سحب لستة المفاتيح المتعددة من السيرفر
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
     os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3')
 ]
-# تنظيف اللستة من أي قيم فاضية
-API_KEYS = [key for key in API_KEYS if key]
+# تنظيف اللستة من القيم الفاضية
+API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
 
-# مؤشر لتحديد المفتاح الشغال حالياً
 current_key_index = 0
 
-# دالة ذكية لتبديل المفتاح تلقائياً عند حدوث ضغط أو خطأ
+# دالة فائقة التأمين: لو المفاتيح الجديدة فيها مشكلة، بيرجع للمفتاح الأساسي القديم طوالي
 def get_next_ai_client():
     global current_key_index
     if not API_KEYS:
-        # لو ماف مفاتيح متعددة، يرجع المفتاح الأساسي القديم كاحتياط
+        print("⚠️ لم يتم العثور على المفاتيح المرقمة، جاري استخدام المفتاح الأساسي القديم...")
         fallback_key = os.environ.get('GEMINI_API_KEY')
-        return genai.Client(api_key=fallback_key)
+        return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
     
     key = API_KEYS[current_key_index]
     return genai.Client(api_key=key)
@@ -68,7 +67,7 @@ def rotate_key():
     global current_key_index
     if API_KEYS and len(API_KEYS) > 1:
         current_key_index = (current_key_index + 1) % len(API_KEYS)
-        print(f"⚠️ تم تحويل الضغط والتبديل للمفتاح رقم: {current_key_index + 1}")
+        print(f"🔄 تم التدوير للمفتاح رقم: {current_key_index + 1}")
 
 group_members = {}
 manual_history = {}
@@ -122,7 +121,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else: await update.message.reply_text("الملفات فاضية!")
         if user_id == ADMIN_ID: return
 
-    # === مسح الذاكرة لتصفية التُقل تيك أواي ===
+    # === مسح الذاكرة ===
     if user_text in ["تصفية يا ياسمين", "مسح الذاكرة", "/clear"]:
         manual_history[user_id] = []
         await update.message.reply_text("تم تصفية الذاكرة وبدأنا صفحة جديدة بيضاء وخفيفة! 🧹✨")
@@ -196,11 +195,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_prompt = f"{context_text}المستخدم: {user_text}" if user_text else f"{context_text}[ميديا]"
     contents_list.append(current_prompt)
 
-    # 🚀 استدعاء العميل الحالي الذكي
-    ai_client = get_next_ai_client()
-
     try:
-        # التشغيل على موديل gemini-2.0-flash السريع جداً والأوسع في الـ Limits
+        # 🚀 جلب عميل الـ API المحمي
+        ai_client = get_next_ai_client()
         response = ai_client.models.generate_content(
             model='gemini-2.0-flash',
             contents=contents_list,
@@ -209,34 +206,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if response.text:
             reply_result = response.text.strip()
-            
             if user_text:
                 manual_history[user_id].append(f"المستخدم: {user_text}")
                 manual_history[user_id].append(f"ياسمين: {reply_result}")
                 if len(manual_history[user_id]) > 4:
                     manual_history[user_id] = manual_history[user_id][-4:]
-
             await asyncio.sleep(0.1)
             await update.message.reply_text(reply_result)
             
     except Exception as e:
-        print(f"💥 خطأ في المفتاح الحالي: {e}")
-        rotate_key() # تدوير المفتاح طفشاً من الضغط والـ Rate Limit طوالي
-        
-        # محاولة الإنقاذ السريع بالمفتاح الجديد طالما المفتاح القديم علّق
+        print(f"💥 خطأ الـ API الأساسي: {e}")
+        rotate_key() # تدوير طوالي
         try:
-            fallback_client = get_next_ai_client()
-            fallback_response = fallback_client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=[user_text if user_text else "معاك يا ملك"],
-                config=types.GenerateContentConfig(system_instruction=sys_instruction)
-            )
-            if fallback_response.text:
-                await update.message.reply_text(fallback_response.text.strip())
-        except Exception: pass
+            # محاولة إنقاذ أخيرة بالمفتاح الاحتياطي القديم مباشرة
+            fallback_key = os.environ.get('GEMINI_API_KEY')
+            if fallback_key:
+                fallback_client = genai.Client(api_key=fallback_key.strip())
+                fallback_response = fallback_client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=[user_text if user_text else "معاك يا ملك"],
+                    config=types.GenerateContentConfig(system_instruction=sys_instruction)
+                )
+                if fallback_response.text:
+                    await update.message.reply_text(fallback_response.text.strip())
+        except Exception as ex:
+            print(f"فشل الإنقاذ الشامل: {ex}")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين النفاثة بنظام تدوير المفاتيح المتعددة وموديل 2.0...")
+    print("🚀 تشغيل ياسمين النفاثة الفولاذية...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
