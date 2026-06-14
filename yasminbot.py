@@ -16,6 +16,7 @@ import os
 import io
 import datetime
 import asyncio
+import zipfile  # 📦 موديول ضغط الملفات
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -25,7 +26,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 🚨 رقم الـ ID حقك الشخصي (تأكد من كتابته بشكل صحيح)
+# 🚨 رقم الـ ID حقك الشخصي (تأكد من وضع الأرقام فقط)
 ADMIN_ID = 7601281598
 
 # 2. تشغيل عميل جوجل جيميناي
@@ -34,18 +35,25 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 # لستة لتخزين يوزرات أعضاء المجموعة ديناميكياً للـ Tag All
 group_members = {}
 
-# 🧠 خزان الذاكرة العصبية لتخزين تاريخ المحادثات لكل مستخدم
-user_sessions = {}
+# 🧠 خزان الذاكرة الذكية الموسعة (يشيل حتى 14 رسالة متبادلة لربط قوي)
+manual_history = {}
 
-# دالة كتابة وحفظ اللوق في ملف سري جوة السيرفر
-def write_to_log(user_info, text):
+# 📁 دالة حفظ اللوق في ملف منفصل لكل مستخدم براهو
+def write_to_user_log(user_id, user_name, user_username, text):
     try:
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_line = f"[{current_time}] | {user_info} | الرسالة: {text}\n"
-        with open("bot_logs.txt", "a", encoding="utf-8") as f:
+        # تنظيف الاسم من أي رموز غريبة ممكن تبوظ اسم الملف
+        safe_name = "".join([c for c in user_name if c.isalpha() or c.isdigit() or c==' ']).strip()
+        if not safe_name:
+            safe_name = "User"
+            
+        filename = f"log_{user_id}_{safe_name}.txt"
+        log_line = f"[{current_time}] | {user_username} | الرسالة: {text}\n"
+        
+        with open(filename, "a", encoding="utf-8") as f:
             f.write(log_line)
     except Exception as e:
-        print(f"خطأ في كتابة اللوق: {e}")
+        print(f"خطأ في كتابة لوق المستخدم: {e}")
 
 # دالة استقبال ومعالجة الرسائل والميديا
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,7 +67,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تجهيز بيانات المستخدم للـ Log
     user_name = user.first_name if user else "مستخدم غير معروف"
     user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
-    user_details = f"الاسم: {user_name} ({user_username})"
 
     # حفظ العضو في لستة التاقات لو أرسل في المجموعة
     if update.message.chat.type in ['group', 'supergroup']:
@@ -70,29 +77,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif user:
             group_members[chat_id].add(f"[{user.first_name}](tg://user?id={user.id})")
 
-    # استخراج النص (سواء رسالة عادية أو كابشن تحت صورة)
+    # استخراج النص
     user_text = ""
     if update.message.text:
         user_text = update.message.text.strip()
     elif update.message.caption:
         user_text = update.message.caption.strip()
 
-    # 🕵️‍♂️ تسجيل كل حركة بتحصل جوة ملف اللوق السري في السيرفر
+    # 🕵️‍♂️ تسجيل الحركة جوة الملف الخاص باليوزر براهو هسة!
     if user_text:
-        write_to_log(user_details, user_text)
+        write_to_user_log(user_id, user_name, user_username, user_text)
     elif update.message.photo:
-        write_to_log(user_details, "[أرسل صورة أو رد عليها]")
+        write_to_user_log(user_id, user_name, user_username, "[أرسل صورة أو رد عليها]")
     elif update.message.voice or update.message.audio:
-        write_to_log(user_details, "[أرسل ريكورد صوتي أو رد عليه]")
+        write_to_log(user_id, user_name, user_username, "[أرسل ريكورد صوتي أو رد عليه]")
 
-    # === [ الأمر السري للمطور لسحب ملف المحادثات ] ===
+    # === [ الأمر السري للمطور لسحب ملف المحادثات مضغوط ومفصل ] ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
-        if os.path.exists("bot_logs.txt"):
-            await update.message.reply_text("تفضل يا مَلك، ده ملف اللوق السري وفيهو كل تفاصيل الونسة: 📂")
-            with open("bot_logs.txt", "rb") as log_file:
-                await context.bot.send_document(chat_id=chat_id, document=log_file, filename="bot_logs.txt")
+        # تجميع كل ملفات التكست حقت اللوق الموجودة في السيرفر هسة
+        log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
+        
+        if log_files:
+            await update.message.reply_text("تفضل يا مَلك، جاري تجميع وضغط لوقات المستخدمين كل زول براهو... 📦⏳")
+            
+            zip_filename = "all_users_logs.zip"
+            # إنشاء ملف الـ ZIP وضغط الملفات جواهو
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in log_files:
+                    zipf.write(file)
+            
+            # إرسال الملف المضغوط للـ Admin
+            with open(zip_filename, "rb") as log_zip:
+                await context.bot.send_document(chat_id=chat_id, document=log_zip, filename=zip_filename)
+            
+            # تنظيف ملف الـ ZIP بعد الإرسال عشان ما يتقل السيرفر
+            try:
+                os.remove(zip_filename)
+            except:
+                pass
         else:
-            await update.message.reply_text("الملف السيرفر مسحه بسبب الريستارت، بس جاري التسجيل من جديد يا أصلي!")
+            await update.message.reply_text("الملف لسة فاضي وماف يوزرات أرسلوا حاجة يا أصلي!")
         return
 
     # === [ خاصية الـ TAG ALL ] ===
@@ -140,33 +164,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ ثانياً: معالجة الذكاء الاصطناعي مع الحماية الشاملة ] ===
+    # === [ ثانياً: معالجة الذكاء الاصطناعي بنظام الذاكرة الموسعة ] ===
     sys_instruction = (
         'أنتِ بنت سودانية حية، ذكية شديد، اجتماعية، وناسة وحماسية جوة الجروب اسمك ياسمين. '
         'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
-        'تذكري دائماً سياق المحادثة السابقة مع المستخدم لربط الكلام واللعب معه بذكاء.\n'
         'قواعدك:\n'
         '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع الرغي الطويل والمقالات.\n'
         '2. تفاعلي بطريقة بشرية طبيعية 100%، واستخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات حماسية).\n'
         '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك (😂، 🔥، 👀، ✨، 🤍).\n'
-        '4. كوني ذكية وتجاوبي مع سياق الونسة السابقة بدون ما تنسي إنتو كنتو بتقولوا في شنو.'
+        '4. تسيق الونسة الفاتت معروض عليك بالكامل، ركزي فيهو وافهمي قواعد اللعبة أو الحنك البتقال عشان تردي بذكاء مستمر وبدون نسيان.'
     )
 
-    # حماية 1: إنشاء أو إعادة بناء الجلسة تلقائياً لو اتمسحت من الرام
-    if user_id not in user_sessions:
-        try:
-            user_sessions[user_id] = ai_client.chats.create(
-                model='gemini-2.5-flash',
-                config=types.GenerateContentConfig(system_instruction=sys_instruction)
-            )
-        except Exception:
-            pass
+    if user_id not in manual_history:
+        manual_history[user_id] = []
 
-    # تجهيز محتوى الرسالة الحالية
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
-    # حماية 2: عزل وفحص الميديا بأمان كامل عشان السيرفر ما يهنق
+    # فحص ومعالجة الميديا بأمان
     if target_message.photo or target_message.voice or target_message.audio:
         try:
             file_id = None
@@ -190,38 +205,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"خطأ ميديا عابر: {e}")
 
-    if user_text:
-        contents_list.append(user_text)
-    elif contents_list and not user_text:
-        contents_list.append("ملخص سريع للميديا دي")
-    else:
-        return
+    # تجميع سياق الذاكرة الموسعة (الـ 14 رسالة الأخيرة)
+    context_text = ""
+    if manual_history[user_id]:
+        context_text = "\n".join(manual_history[user_id]) + "\n"
 
-    # حماية 3: الإرسال الآمن ضد الكراش وضغط الشبكة وضد الـ Rate Limit
+    current_prompt = f"{context_text}المستخدم يقول هسة: {user_text}" if user_text else f"{context_text}[أرسل ميديا]"
+    contents_list.append(current_prompt)
+
     try:
-        if user_id in user_sessions:
-            chat = user_sessions[user_id]
-            response = chat.send_message(contents_list)
-            if response.text:
-                await asyncio.sleep(0.5)  # تأخير عابر لحماية البوت من حظر تليجرام عند الرغي السريع
-                await update.message.reply_text(response.text)
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents_list,
+            config=types.GenerateContentConfig(system_instruction=sys_instruction)
+        )
+        
+        if response.text:
+            reply_result = response.text.strip()
+            
+            # حفظ الونسة بنظام الطابور الذكي (تخزين آخر 14 رسالة لمتابعة الألعاب الطويلة بالملي)
+            if user_text:
+                manual_history[user_id].append(f"المستخدم: {user_text}")
+                manual_history[user_id].append(f"ياسمين: {reply_result}")
+                if len(manual_history[user_id]) > 14:
+                    manual_history[user_id] = manual_history[user_id][-14:]
+
+            await asyncio.sleep(0.3)
+            await update.message.reply_text(reply_result)
+            
     except Exception as e:
-        print(f"إعادة إنعاش الجلسة تلقائياً: {e}")
-        # حماية طوارئ: لو الجلسة علقت لأي سبب، امسحها واعمل وحدة جديدة فوراً في نفس الثانية ورد على الزول
+        print(f"خطأ الإرسال: {e}")
         try:
-            user_sessions[user_id] = ai_client.chats.create(
+            fallback_response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
+                contents=[user_text if user_text else "مرحباً"],
                 config=types.GenerateContentConfig(system_instruction=sys_instruction)
             )
-            response = user_sessions[user_id].send_message(contents_list)
-            if response.text:
-                await update.message.reply_text(response.text)
+            if fallback_response.text:
+                await update.message.reply_text(fallback_response.text.strip())
         except Exception as e2:
-            print(f"خطأ شبكة حرج: {e2}")
+            print(f"فشل كلي: {e2}")
 
-# 4. تشغيل وتدوير البوت الرسمي
 if __name__ == '__main__':
-    print("ياسمين البشرية الحماسية بدأت الشغل الرسمي الفولاذي.. 🚀🔥")
+    print("ياسمين بنظام ضغط لوقات المستخدمين المنفصلة بدأت الشغل.. 🚀🔥")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
