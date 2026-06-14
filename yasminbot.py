@@ -15,6 +15,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 import os
 import io
 import datetime
+import asyncio
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -24,7 +25,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 🚨 رقم الـ ID حقك الشخصي سحب اللوق
+# 🚨 رقم الـ ID حقك الشخصي (تأكد من كتابته بشكل صحيح)
 ADMIN_ID = 7601281598
 
 # 2. تشغيل عميل جوجل جيميناي
@@ -33,7 +34,7 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 # لستة لتخزين يوزرات أعضاء المجموعة ديناميكياً للـ Tag All
 group_members = {}
 
-# 🧠 خزان الذاكرة العصبية لتخزين تاريخ المحادثات لكل مستخدم بشكل منفصل
+# 🧠 خزان الذاكرة العصبية لتخزين تاريخ المحادثات لكل مستخدم
 user_sessions = {}
 
 # دالة كتابة وحفظ اللوق في ملف سري جوة السيرفر
@@ -91,7 +92,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open("bot_logs.txt", "rb") as log_file:
                 await context.bot.send_document(chat_id=chat_id, document=log_file, filename="bot_logs.txt")
         else:
-            await update.message.reply_text("الملف لسة فاضي وماف زول أرسل حاجة يا أصلي!")
+            await update.message.reply_text("الملف السيرفر مسحه بسبب الريستارت، بس جاري التسجيل من جديد يا أصلي!")
         return
 
     # === [ خاصية الـ TAG ALL ] ===
@@ -109,7 +110,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # === [ أولاً: لستة الردود التلقائية الثابتة (القديمة + الفاضية) ] ===
+    # === [ أولاً: لستة الردود التلقائية الثابتة ] ===
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -139,37 +140,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ ثانياً: معالجة الذكاء الاصطناعي بالذاكرة المتصلة والربط المستمر ] ===
-    target_message = update.message
-    if update.message.reply_to_message:
-        target_message = update.message.reply_to_message
+    # === [ ثانياً: معالجة الذكاء الاصطناعي مع الحماية الشاملة ] ===
+    sys_instruction = (
+        'أنتِ بنت سودانية حية، ذكية شديد، اجتماعية، وناسة وحماسية جوة الجروب اسمك ياسمين. '
+        'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
+        'تذكري دائماً سياق المحادثة السابقة مع المستخدم لربط الكلام واللعب معه بذكاء.\n'
+        'قواعدك:\n'
+        '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع الرغي الطويل والمقالات.\n'
+        '2. تفاعلي بطريقة بشرية طبيعية 100%، واستخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات حماسية).\n'
+        '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك (😂، 🔥، 👀، ✨، 🤍).\n'
+        '4. كوني ذكية وتجاوبي مع سياق الونسة السابقة بدون ما تنسي إنتو كنتو بتقولوا في شنو.'
+    )
 
-    # إنشاء أو استدعاء الشات سيسشن الخاص باليوزر
+    # حماية 1: إنشاء أو إعادة بناء الجلسة تلقائياً لو اتمسحت من الرام
     if user_id not in user_sessions:
-        # تجهيز إعدادات النظام لياسمين الوناسة
-        sys_instruction = (
-            'أنتِ بنت سودانية حية، ذكية شديد، اجتماعية، وناسة وحماسية جوة الجروب اسمك ياسمين. '
-            'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
-            'تذكري دائماً سياق المحادثة السابقة مع المستخدم لربط الكلام واللعب معه بذكاء.\n'
-            'قواعدك:\n'
-            '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع الرغي الطويل والمقالات.\n'
-            '2. تفاعلي بطريقة بشرية طبيعية 100%، واستخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات حماسية).\n'
-            '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك (😂، 🔥، 👀، ✨، 🤍).\n'
-            '4. كوني ذكية وتجاوبي مع سياق الونسة السابقة بدون ما تنسي إنتو كنتو بتقولوا في شنو.'
-        )
-        # فتح جلسة محادثة مستمرة تدعم الذاكرة
-        user_sessions[user_id] = ai_client.chats.create(
-            model='gemini-2.5-flash',
-            config=types.GenerateContentConfig(system_instruction=sys_instruction)
-        )
+        try:
+            user_sessions[user_id] = ai_client.chats.create(
+                model='gemini-2.5-flash',
+                config=types.GenerateContentConfig(system_instruction=sys_instruction)
+            )
+        except Exception:
+            pass
 
-    # تجهيز محتوى الرسالة الحالية (نص أو ميديا)
+    # تجهيز محتوى الرسالة الحالية
     contents_list = []
-    file_bytes = None
-    mime_type = None
+    target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
+    # حماية 2: عزل وفحص الميديا بأمان كامل عشان السيرفر ما يهنق
     if target_message.photo or target_message.voice or target_message.audio:
         try:
+            file_id = None
+            mime_type = None
             if target_message.photo:
                 file_id = target_message.photo[-1].file_id
                 mime_type = "image/jpeg"
@@ -179,42 +180,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif target_message.audio:
                 file_id = target_message.audio.file_id
                 mime_type = "audio/mpeg"
-            else:
-                file_id = None
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
                 if tg_file.file_size <= 6 * 1024 * 1024:
                     out = io.BytesIO()
                     await tg_file.download_to_memory(out)
-                    file_bytes = out.getvalue()
-                    contents_list.append(
-                        types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-                    )
+                    contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e:
-            print(f"خطأ ميديا: {e}")
+            print(f"خطأ ميديا عابر: {e}")
 
     if user_text:
         contents_list.append(user_text)
-    elif file_bytes and not user_text:
-        contents_list.append("ملخص سريع ومفيد للميديا دي")
+    elif contents_list and not user_text:
+        contents_list.append("ملخص سريع للميديا دي")
     else:
-        return 
+        return
 
-    # إرسال الرسالة جوة الجلسة (الذاكرة المستمرة)
+    # حماية 3: الإرسال الآمن ضد الكراش وضغط الشبكة وضد الـ Rate Limit
     try:
-        chat = user_sessions[user_id]
-        response = chat.send_message(contents_list)
-        
-        if response.text:
-            await update.message.reply_text(response.text)
-        
+        if user_id in user_sessions:
+            chat = user_sessions[user_id]
+            response = chat.send_message(contents_list)
+            if response.text:
+                await asyncio.sleep(0.5)  # تأخير عابر لحماية البوت من حظر تليجرام عند الرغي السريع
+                await update.message.reply_text(response.text)
     except Exception as e:
-        print(f"خطأ الذاكرة: {e}")
+        print(f"إعادة إنعاش الجلسة تلقائياً: {e}")
+        # حماية طوارئ: لو الجلسة علقت لأي سبب، امسحها واعمل وحدة جديدة فوراً في نفس الثانية ورد على الزول
+        try:
+            user_sessions[user_id] = ai_client.chats.create(
+                model='gemini-2.5-flash',
+                config=types.GenerateContentConfig(system_instruction=sys_instruction)
+            )
+            response = user_sessions[user_id].send_message(contents_list)
+            if response.text:
+                await update.message.reply_text(response.text)
+        except Exception as e2:
+            print(f"خطأ شبكة حرج: {e2}")
 
-# 4. تشغيل وتدوير البوت
+# 4. تشغيل وتدوير البوت الرسمي
 if __name__ == '__main__':
-    print("ياسمين ذات الذاكرة العصبية الذكية بدأت الشغل.. 🚀🧠🔥")
+    print("ياسمين البشرية الحماسية بدأت الشغل الرسمي الفولاذي.. 🚀🔥")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
