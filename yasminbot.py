@@ -5,7 +5,6 @@ import requests
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
-# 🔄 جروك النكز الداخلي الصامت لمنع النوم والـ 504
 def keep_alive_ping():
     time.sleep(300)
     while True:
@@ -27,40 +26,41 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-import os
 import io
 import datetime
 import asyncio
 import zipfile
-import google.generativeai as genai # 🔄 الرجوع للمكتبة الفولاذية المستقرة والسمحة
+from google import genai
+from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-# 1. سحب توكن تليجرام ورقم الآدمن
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 🚨 ضع رقم حسابك هنا (أرقام فقط)
+ADMIN_ID = 7601281598
 
-# 🔑 سحب لستة المفاتيح المتعددة من السيرفر
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
     os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3'),
-    os.environ.get('GEMINI_API_KEY') # المفتاح الأساسي كاحتياط رابع
+    os.environ.get('GEMINI_API_KEY')
 ]
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
 
 current_key_index = 0
 
-# تهيئة المفتاح الأول في البداية
-if API_KEYS:
-    genai.configure(api_key=API_KEYS[current_key_index])
+def get_next_ai_client():
+    global current_key_index
+    if not API_KEYS:
+        fallback_key = os.environ.get('GEMINI_API_KEY')
+        return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
+    key = API_KEYS[current_key_index]
+    return genai.Client(api_key=key)
 
-def rotate_to_next_key():
+def rotate_key():
     global current_key_index
     if API_KEYS and len(API_KEYS) > 1:
         current_key_index = (current_key_index + 1) % len(API_KEYS)
-        genai.configure(api_key=API_KEYS[current_key_index])
-        print(f"🔄 تم تدوير المفتاح بنجاح! شغالين هسة بالمفتاح رقم: {current_key_index + 1}")
+        print(f"⚠️ تم تحويل التدوير للمفتاح رقم: {current_key_index + 1}")
 
 group_members = {}
 manual_history = {}
@@ -96,7 +96,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
 
-    # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
         log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
         if log_files:
@@ -110,7 +109,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         return
 
-    # === TAG ALL ===
     if user_text.lower() in ['تاق', '@all', 'تاغ']:
         if update.message.chat.type not in ['group', 'supergroup']: return
         members = group_members.get(chat_id, set())
@@ -119,7 +117,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -136,7 +133,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # توجيه ياسمين المتوازن المشوق
     sys_instruction = (
         'أنتِ بنت سودانية حية، ذكية، واعية ومثقفة اسمك ياسمين، مطورك وصانعك هو المبرمج العبقري أحمد. '
         'قواعدك:\n'
@@ -148,38 +144,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    # ⚡ الذاكرة الخفيفة الطائرة: حنمرر السطر الفات والرد الفات بس (رسالة وحدة متبادلة) عشان الـ API يطير طيران
     context_text = ""
     if manual_history[user_id]:
         context_text = "\n".join(manual_history[user_id]) + "\n"
 
     current_prompt = f"{context_text}المستخدم: {user_text}" if user_text else f"{context_text}[ميديا]"
 
-    # المحاولة عبر السيستم المستقر والمضمون
     for _ in range(len(API_KEYS) if API_KEYS else 1):
         try:
-            model = genai.GenerativeModel(
-                model_name='gemini-2.5-flash', # 🎯 تشغيل الـ 2.5 الفخم
-                system_instruction=sys_instruction
+            ai_client = get_next_ai_client()
+            response = ai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[current_prompt],
+                config=types.GenerateContentConfig(system_instruction=sys_instruction)
             )
-            response = model.generate_content(current_prompt)
             
             if response.text:
                 reply_result = response.text.strip()
                 if user_text:
-                    manual_history[user_id] = [f"المستخدم: {user_text}", f"ياسمين: {reply_result}"] # تصفية الذاكرة الفورية لرسالة واحدة
-                
+                    manual_history[user_id] = [f"المستخدم: {user_text}", f"ياسمين: {reply_result}"]
                 await asyncio.sleep(0.1)
                 await update.message.reply_text(reply_result)
-                return # نجح الرد! نطلع طوالي
+                return
                 
         except Exception as e:
-            print(f"💥 فشل المفتاح الحالي بسبب: {e}")
-            rotate_to_next_key() # لف للمفتاح البعده طوالي في نفس اللحظة عشان يلحق الرسالة
+            print(f"💥 خطأ الـ API الحديث 2.5: {e}")
+            rotate_key()
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين 2.5 بالمكتبة المستقرة الفولاذية والذاكرة الطائرة...")
+    print("🚀 تشغيل ياسمين المعتمدة 2.5 النظيفة...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
