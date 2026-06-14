@@ -14,6 +14,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 
 import os
 import io
+import datetime
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -23,11 +24,24 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
+# 🚨 رقم الـ ID حقك الشخصي (تأكد من كتابته بشكل صحيح)
+ADMIN_ID = رقم_حسابك_هنا
+
 # 2. تشغيل عميل جوجل جيميناي
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # لستة لتخزين يوزرات أعضاء المجموعة ديناميكياً للـ Tag All
 group_members = {}
+
+# دالة كتابة وحفظ اللوق في ملف سري جوة السيرفر
+def write_to_log(user_info, text):
+    try:
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_line = f"[{current_time}] | {user_info} | الرسالة: {text}\n"
+        with open("bot_logs.txt", "a", encoding="utf-8") as f:
+            f.write(log_line)
+    except Exception as e:
+        print(f"خطأ في كتابة اللوق: {e}")
 
 # دالة استقبال ومعالجة الرسائل والميديا
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -37,6 +51,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     user = update.message.from_user
     
+    # تجهيز بيانات المستخدم للـ Log
+    user_name = user.first_name if user else "مستخدم غير معروف"
+    user_username = f"@{user.username}" if user and user.username else f"ID: {user.id}"
+    user_details = f"الاسم: {user_name} ({user_username})"
+
     # حفظ العضو في لستة التاقات لو أرسل في المجموعة
     if update.message.chat.type in ['group', 'supergroup']:
         if chat_id not in group_members:
@@ -46,12 +65,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif user:
             group_members[chat_id].add(f"[{user.first_name}](tg://user?id={user.id})")
 
-    # استخراج النص (سواء رسالة عادية أو كابشن تحت صورة/فديو)
+    # استخراج النص (سواء رسالة عادية أو كابشن تحت صورة)
     user_text = ""
     if update.message.text:
         user_text = update.message.text.strip()
     elif update.message.caption:
         user_text = update.message.caption.strip()
+
+    # 🕵️‍♂️ تسجيل كل حركة بتحصل جوة ملف اللوق السري في السيرفر
+    if user_text:
+        write_to_log(user_details, user_text)
+    elif update.message.photo:
+        write_to_log(user_details, "[أرسل صورة أو رد عليها]")
+    elif update.message.voice or update.message.audio:
+        write_to_log(user_details, "[أرسل ريكورد صوتي أو رد عليه]")
+
+    # === [ الأمر السري للمطور لسحب ملف المحادثات ] ===
+    if user_text == "سحب اللوق" and user.id == ADMIN_ID:
+        if os.path.exists("bot_logs.txt"):
+            await update.message.reply_text("تفضل يا مَلك، ده ملف اللوق السري وفيهو كل تفاصيل الونسة: 📂")
+            with open("bot_logs.txt", "rb") as log_file:
+                await context.bot.send_document(chat_id=chat_id, document=log_file, filename="bot_logs.txt")
+        else:
+            await update.message.reply_text("الملف لسة فاضي وماف زول أرسل حاجة يا أصلي!")
+        return
 
     # === [ خاصية الـ TAG ALL ] ===
     if user_text.lower() in ['تاق', '@all', 'تاغ']:
@@ -70,7 +107,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # === [ أولاً: لستة الردود التلقائية الثابتة (القديمة + الفاضية) ] ===
     auto_replies = {
-        # ⬇️ ردودك الأساسية المحفوظة (ما هبشناها) ⬇️
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
@@ -94,7 +130,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'شكرا': 'عفواً 🌹',
         'مشتاقين': '🥺🥺',
         
-        # ⬇️ باقي الـ 35 خانة الفاضية جاهزة لتعديلك ⬇️
+        # باقي الـ 35 خانة الفاضية جاهزة لتعديلك
         'الكلمة 23': 'الرد هنا 23',
         'الكلمة 24': 'الرد هنا 24',
         'الكلمة 25': 'الرد هنا 25',
@@ -110,88 +146,79 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الكلمة 35': 'الرد هنا 35',
     }
     
+    # لو الكلام المكتوب متطابق مع المحفوظات، البوت بيرد فورا ويقفل الدالة
     if user_text in auto_replies:
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ ثانياً: معالجة الذكاء الاصطناعي مع شرط العلامة المنقوطة (;) ] ===
-    if user_text.startswith(';'):
-        cleaned_text = user_text[1:].strip()
-        
-        contents_list = []
-        mime_type = None
-        file_bytes = None
-        
-        target_message = update.message
-        if update.message.reply_to_message:
-            target_message = update.message.reply_to_message
+    # === [ ثانياً: معالجة الذكاء الاصطناعي الوفية والوناسة البشارية ] ===
+    contents_list = []
+    mime_type = None
+    file_bytes = None
+    
+    target_message = update.message
+    if update.message.reply_to_message:
+        target_message = update.message.reply_to_message
 
+    if target_message.photo or target_message.voice or target_message.audio:
         try:
             if target_message.photo:
                 file_id = target_message.photo[-1].file_id
                 mime_type = "image/jpeg"
-            elif target_message.video:
-                file_id = target_message.video.file_id
-                mime_type = "video/mp4"
-            elif target_message.audio:
-                file_id = target_message.audio.file_id
-                mime_type = target_message.audio.mime_type or "audio/mpeg"
             elif target_message.voice:
                 file_id = target_message.voice.file_id
-                mime_type = target_message.voice.mime_type or "audio/ogg"
+                mime_type = "audio/ogg"
+            elif target_message.audio:
+                file_id = target_message.audio.file_id
+                mime_type = "audio/mpeg"
             else:
                 file_id = None
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                out = io.BytesIO()
-                await tg_file.download_to_memory(out)
-                file_bytes = out.getvalue()
-                
-                contents_list.append(
-                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-                )
-
-        except Exception as e:
-            print(f"خطأ أثناء تحميل الميديا: {e}")
-            await update.message.reply_text("قدرت ألقط الميديا بس السيرفر عصلج في تحميلها، أرسل تاني!")
-            return
-
-        if cleaned_text:
-            contents_list.append(cleaned_text)
-        elif file_bytes and not cleaned_text:
-            contents_list.append("اشرح لي بالتفصيل وبكامل الراحة الميديا دي فيها شنو أو لخص الصوت ده")
-        else:
-            return 
-
-        # إرسال الطلب النهائي لجيميناي الموسوعي المطور والردود المفتوحة
-        try:
-            response = ai_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=contents_list,
-                config=types.GenerateContentConfig(
-                    system_instruction=(
-                        'أنتِ بوت تليجرام ذكي وسريع وموسوعي اسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
-                        'هو المبرمج أحمد. خذي كامل راحتك في الردود، ولا تختصري إجاباتك بل اشرحي ووضحي '
-                        'بالتفصيل المفيد وقدمي معلومات غنية وشاملة ومقنعة عن أي موضوع تُسألين عنه. '
-                        'ردي دائماً بلهجة ودودة ومحترمة ومريحة بالعامية السودانية الضابطة والمفهومة.'
+                if tg_file.file_size <= 6 * 1024 * 1024:
+                    out = io.BytesIO()
+                    await tg_file.download_to_memory(out)
+                    file_bytes = out.getvalue()
+                    contents_list.append(
+                        types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
                     )
+        except Exception as e:
+            print(f"خطأ ميديا عابر: {e}")
+
+    if user_text:
+        contents_list.append(user_text)
+    elif file_bytes and not user_text:
+        contents_list.append("ملخص سريع ومفيد للميديا دي")
+    else:
+        return 
+
+    # إرسال الطلب لجيميناي (تعليمات التفاعل البشري، الحماس، والإيموجيات مع الاختصار الصارم)
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents_list,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    'أنتِ بنت سودانية حية، ذكية، اجتماعية، وناسة وحماسية شديد جوة الجروب اسمك ياسمين. '
+                    'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
+                    'قواعدك الذهبية:\n'
+                    '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع نهائياً الرغي والمقالات الطويلة المملة.\n'
+                    '2. تفاعلي بطريقة بشرية طبيعية 100% وعفوية، استخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات ذكية ومتجاوبة مع المعنى).\n'
+                    '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك وزيادة التفاعل (مثل: 😂، 🔥، 👀، ✨، 🤷‍♀️، 🤍).\n'
+                    '4. ممنوع نظام الأسئلة الآلية المكررة الروتينية، ردي على حسب شات العضو بكل ذكاء وسلاسة كأنك عضو بشري معاهم بالظبط وبدون تصنع.'
                 )
             )
-            if response.text:
-                await update.message.reply_text(response.text)
-            else:
-                await update.message.reply_text("سمعت وعرفت الميديا، بس ما قدرت أطلع نص!")
-            
-        except Exception as e:
-            print(f"حدث خطأ في الاتصال بجوجل: {e}")
-            await update.message.reply_text("عذراً يا ملك، السيرفر مضغوط ثواني، جرب أرسل تاني!")
-    else:
-        return
+        )
+        if response.text:
+            await update.message.reply_text(response.text)
+        
+    except Exception as e:
+        print(f"خطأ جيميناي: {e}")
 
 # 4. تشغيل وتدوير البوت
 if __name__ == '__main__':
-    print("ياسمين العبقرية بدأت الشغل بالردود المفصلة والكاملة والمحفوظات.. 🚀🌺")
+    print("ياسمين البشرية الحماسية بدأت الشغل الرسمي.. 🚀🔥")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
