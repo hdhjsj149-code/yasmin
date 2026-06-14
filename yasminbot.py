@@ -24,7 +24,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 🚨 رقم الـ ID حقك الشخصي (تأكد من كتابته بشكل صحيح)
+# 🚨 رقم الـ ID حقك الشخصي سحب اللوق
 ADMIN_ID = 7601281598
 
 # 2. تشغيل عميل جوجل جيميناي
@@ -32,6 +32,9 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # لستة لتخزين يوزرات أعضاء المجموعة ديناميكياً للـ Tag All
 group_members = {}
+
+# 🧠 خزان الذاكرة العصبية لتخزين تاريخ المحادثات لكل مستخدم بشكل منفصل
+user_sessions = {}
 
 # دالة كتابة وحفظ اللوق في ملف سري جوة السيرفر
 def write_to_log(user_info, text):
@@ -50,10 +53,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.message.chat_id
     user = update.message.from_user
+    user_id = user.id if user else chat_id
     
     # تجهيز بيانات المستخدم للـ Log
     user_name = user.first_name if user else "مستخدم غير معروف"
-    user_username = f"@{user.username}" if user and user.username else f"ID: {user.id}"
+    user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
     user_details = f"الاسم: {user_name} ({user_username})"
 
     # حفظ العضو في لستة التاقات لو أرسل في المجموعة
@@ -81,7 +85,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         write_to_log(user_details, "[أرسل ريكورد صوتي أو رد عليه]")
 
     # === [ الأمر السري للمطور لسحب ملف المحادثات ] ===
-    if user_text == "سحب اللوق" and user.id == ADMIN_ID:
+    if user_text == "سحب اللوق" and user_id == ADMIN_ID:
         if os.path.exists("bot_logs.txt"):
             await update.message.reply_text("تفضل يا مَلك، ده ملف اللوق السري وفيهو كل تفاصيل الونسة: 📂")
             with open("bot_logs.txt", "rb") as log_file:
@@ -129,36 +133,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'يديك العافيه ': 'الله يعافيك يارب 🤲',
         'شكرا': 'عفواً 🌹',
         'مشتاقين': '🥺🥺',
-        
-        # باقي الـ 35 خانة الفاضية جاهزة لتعديلك
-        'الكلمة 23': 'الرد هنا 23',
-        'الكلمة 24': 'الرد هنا 24',
-        'الكلمة 25': 'الرد هنا 25',
-        'الكلمة 26': 'الرد هنا 26',
-        'الكلمة 27': 'الرد هنا 27',
-        'الكلمة 28': 'الرد هنا 28',
-        'الكلمة 29': 'الرد هنا 29',
-        'الكلمة 30': 'الرد هنا 30',
-        'الكلمة 31': 'الرد هنا 31',
-        'الكلمة 32': 'الرد هنا 32',
-        'الكلمة 33': 'الرد هنا 33',
-        'الكلمة 34': 'الرد هنا 34',
-        'الكلمة 35': 'الرد هنا 35',
     }
     
-    # لو الكلام المكتوب متطابق مع المحفوظات، البوت بيرد فورا ويقفل الدالة
     if user_text in auto_replies:
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ ثانياً: معالجة الذكاء الاصطناعي الوفية والوناسة البشارية ] ===
-    contents_list = []
-    mime_type = None
-    file_bytes = None
-    
+    # === [ ثانياً: معالجة الذكاء الاصطناعي بالذاكرة المتصلة والربط المستمر ] ===
     target_message = update.message
     if update.message.reply_to_message:
         target_message = update.message.reply_to_message
+
+    # إنشاء أو استدعاء الشات سيسشن الخاص باليوزر
+    if user_id not in user_sessions:
+        # تجهيز إعدادات النظام لياسمين الوناسة
+        sys_instruction = (
+            'أنتِ بنت سودانية حية، ذكية شديد، اجتماعية، وناسة وحماسية جوة الجروب اسمك ياسمين. '
+            'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
+            'تذكري دائماً سياق المحادثة السابقة مع المستخدم لربط الكلام واللعب معه بذكاء.\n'
+            'قواعدك:\n'
+            '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع الرغي الطويل والمقالات.\n'
+            '2. تفاعلي بطريقة بشرية طبيعية 100%، واستخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات حماسية).\n'
+            '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك (😂، 🔥، 👀، ✨، 🤍).\n'
+            '4. كوني ذكية وتجاوبي مع سياق الونسة السابقة بدون ما تنسي إنتو كنتو بتقولوا في شنو.'
+        )
+        # فتح جلسة محادثة مستمرة تدعم الذاكرة
+        user_sessions[user_id] = ai_client.chats.create(
+            model='gemini-2.5-flash',
+            config=types.GenerateContentConfig(system_instruction=sys_instruction)
+        )
+
+    # تجهيز محتوى الرسالة الحالية (نص أو ميديا)
+    contents_list = []
+    file_bytes = None
+    mime_type = None
 
     if target_message.photo or target_message.voice or target_message.audio:
         try:
@@ -184,7 +192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
                     )
         except Exception as e:
-            print(f"خطأ ميديا عابر: {e}")
+            print(f"خطأ ميديا: {e}")
 
     if user_text:
         contents_list.append(user_text)
@@ -193,32 +201,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return 
 
-    # إرسال الطلب لجيميناي (تعليمات التفاعل البشري، الحماس، والإيموجيات مع الاختصار الصارم)
+    # إرسال الرسالة جوة الجلسة (الذاكرة المستمرة)
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents_list,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    'أنتِ بنت سودانية حية، ذكية، اجتماعية، وناسة وحماسية شديد جوة الجروب اسمك ياسمين. '
-                    'صانعك ومطورك ومبرمجك الأساسي هو المبرمج أحمد. '
-                    'قواعدك الذهبية:\n'
-                    '1. ردي دائماً باختصار شديد ومفيد جداً (سطر واحد أو سطرين بالكتير)، وممنوع نهائياً الرغي والمقالات الطويلة المملة.\n'
-                    '2. تفاعلي بطريقة بشرية طبيعية 100% وعفوية، استخدمي لغة الشات السودانية الحية (ضحك، قفشات، تعليقات ذكية ومتجاوبة مع المعنى).\n'
-                    '3. وزعي إيموجيات معبرة وحية في كل ردودك لتبرزي حماسك وزيادة التفاعل (مثل: 😂، 🔥، 👀، ✨، 🤷‍♀️، 🤍).\n'
-                    '4. ممنوع نظام الأسئلة الآلية المكررة الروتينية، ردي على حسب شات العضو بكل ذكاء وسلاسة كأنك عضو بشري معاهم بالظبط وبدون تصنع.'
-                )
-            )
-        )
+        chat = user_sessions[user_id]
+        response = chat.send_message(contents_list)
+        
         if response.text:
             await update.message.reply_text(response.text)
         
     except Exception as e:
-        print(f"خطأ جيميناي: {e}")
+        print(f"خطأ الذاكرة: {e}")
 
 # 4. تشغيل وتدوير البوت
 if __name__ == '__main__':
-    print("ياسمين البشرية الحماسية بدأت الشغل الرسمي.. 🚀🔥")
+    print("ياسمين ذات الذاكرة العصبية الذكية بدأت الشغل.. 🚀🧠🔥")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
