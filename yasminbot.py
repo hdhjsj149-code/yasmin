@@ -25,7 +25,7 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 # 🚨 رقم الـ ID حقك الشخصي (تأكد من كتابته بشكل صحيح)
-ADMIN_ID = رقم_حسابك_هنا
+ADMIN_ID = 7601281598
 
 # 2. تشغيل عميل جوجل جيميناي
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
