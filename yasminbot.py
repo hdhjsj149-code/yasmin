@@ -95,6 +95,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.caption: user_text = update.message.caption.strip()
 
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
+    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
+    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
 
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
         log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
@@ -144,18 +146,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in manual_history:
         manual_history[user_id] = []
 
+    # 📸 [جزء الميديا المستقر دون أي تعديل في باقي الكود]
+    contents_list = []
+    target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
+
+    if target_message.photo or target_message.voice or target_message.audio:
+        try:
+            file_id = None
+            mime_type = None
+            if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
+            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
+            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
+
+            if file_id:
+                tg_file = await context.bot.get_file(file_id)
+                if tg_file.file_size <= 4 * 1024 * 1024:
+                    out = io.BytesIO()
+                    await tg_file.download_to_memory(out)
+                    contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
+        except Exception as e: print(f"خطأ سحب الميديا: {e}")
+
     context_text = ""
     if manual_history[user_id]:
         context_text = "\n".join(manual_history[user_id]) + "\n"
 
     current_prompt = f"{context_text}المستخدم: {user_text}" if user_text else f"{context_text}[ميديا]"
+    contents_list.append(current_prompt)
 
     for _ in range(len(API_KEYS) if API_KEYS else 1):
         try:
             ai_client = get_next_ai_client()
             response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents=[current_prompt],
+                contents=contents_list,
                 config=types.GenerateContentConfig(system_instruction=sys_instruction)
             )
             
@@ -173,7 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين المعتمدة 2.5 النظيفة...")
+    print("🚀 تشغيل ياسمين المعتمدة 2.5 النظيفة مع الميديا...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
