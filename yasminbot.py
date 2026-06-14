@@ -32,8 +32,7 @@ import io
 import datetime
 import asyncio
 import zipfile
-from google import genai
-from google.genai import types
+import google.generativeai as genai # 🔄 الرجوع للمكتبة الفولاذية المستقرة والسمحة
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
@@ -45,29 +44,23 @@ ADMIN_ID = 7601281598  # 🚨 ضع رقم حسابك هنا (أرقام فقط)
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
     os.environ.get('GEMINI_API_KEY_2'),
-    os.environ.get('GEMINI_API_KEY_3')
+    os.environ.get('GEMINI_API_KEY_3'),
+    os.environ.get('GEMINI_API_KEY') # المفتاح الأساسي كاحتياط رابع
 ]
-# تنظيف اللستة من القيم الفاضية
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
 
 current_key_index = 0
 
-# دالة فائقة التأمين: لو المفاتيح الجديدة فيها مشكلة، بيرجع للمفتاح الأساسي القديم طوالي
-def get_next_ai_client():
-    global current_key_index
-    if not API_KEYS:
-        print("⚠️ لم يتم العثور على المفاتيح المرقمة، جاري استخدام المفتاح الأساسي القديم...")
-        fallback_key = os.environ.get('GEMINI_API_KEY')
-        return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
-    
-    key = API_KEYS[current_key_index]
-    return genai.Client(api_key=key)
+# تهيئة المفتاح الأول في البداية
+if API_KEYS:
+    genai.configure(api_key=API_KEYS[current_key_index])
 
-def rotate_key():
+def rotate_to_next_key():
     global current_key_index
     if API_KEYS and len(API_KEYS) > 1:
         current_key_index = (current_key_index + 1) % len(API_KEYS)
-        print(f"🔄 تم التدوير للمفتاح رقم: {current_key_index + 1}")
+        genai.configure(api_key=API_KEYS[current_key_index])
+        print(f"🔄 تم تدوير المفتاح بنجاح! شغالين هسة بالمفتاح رقم: {current_key_index + 1}")
 
 group_members = {}
 manual_history = {}
@@ -102,40 +95,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.caption: user_text = update.message.caption.strip()
 
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
-    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
-    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
 
     # === سحب اللوق ===
-    if user_text == "سحب اللوق":
-        if user_id == ADMIN_ID:
-            log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
-            if log_files:
-                await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق... 📦⏳")
-                zip_filename = "all_users_logs.zip"
-                with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for file in log_files: zipf.write(file)
-                with open(zip_filename, "rb") as log_zip:
-                    await context.bot.send_document(chat_id=chat_id, document=log_zip, filename=zip_filename)
-                try: os.remove(zip_filename)
-                except: pass
-            else: await update.message.reply_text("الملفات فاضية!")
-        if user_id == ADMIN_ID: return
-
-    # === مسح الذاكرة ===
-    if user_text in ["تصفية يا ياسمين", "مسح الذاكرة", "/clear"]:
-        manual_history[user_id] = []
-        await update.message.reply_text("تم تصفية الذاكرة وبدأنا صفحة جديدة بيضاء وخفيفة! 🧹✨")
+    if user_text == "سحب اللوق" and user_id == ADMIN_ID:
+        log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
+        if log_files:
+            await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق... 📦⏳")
+            zip_filename = "all_users_logs.zip"
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in log_files: zipf.write(file)
+            with open(zip_filename, "rb") as log_zip:
+                await context.bot.send_document(chat_id=chat_id, document=log_zip, filename=zip_filename)
+            try: os.remove(zip_filename)
+            except: pass
         return
 
     # === TAG ALL ===
     if user_text.lower() in ['تاق', '@all', 'تاغ']:
-        if update.message.chat.type not in ['group', 'supergroup']:
-            await update.message.reply_text("الخاصية دي جوة المجموعات بس! 📢")
-            return
+        if update.message.chat.type not in ['group', 'supergroup']: return
         members = group_members.get(chat_id, set())
-        if not members:
-            await update.message.reply_text("لسة ما لقطت أعضاء!")
-            return
+        if not members: return
         tag_text = "📢 **نداء عاجل للجميع:**\n\n" + " ".join(list(members))
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
@@ -147,7 +126,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
-        'وين انت': 'لو مهتم كان عرفته 😎',
+        'وین انت': 'لو مهتم كان عرفته 😎',
         'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً ',
         'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ ',
         'مشتاقين': '🥺🥺',
@@ -157,7 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # توجيه ياسمين المتوازن
+    # توجيه ياسمين المتوازن المشوق
     sys_instruction = (
         'أنتِ بنت سودانية حية، ذكية، واعية ومثقفة اسمك ياسمين، مطورك وصانعك هو المبرمج العبقري أحمد. '
         'قواعدك:\n'
@@ -169,71 +148,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    contents_list = []
-    target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
-
-    if target_message.photo or target_message.voice or target_message.audio:
-        try:
-            file_id = None
-            mime_type = None
-            if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
-            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
-            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
-
-            if file_id:
-                tg_file = await context.bot.get_file(file_id)
-                if tg_file.file_size <= 4 * 1024 * 1024:
-                    out = io.BytesIO()
-                    await tg_file.download_to_memory(out)
-                    contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
-        except Exception as e: print(f"ميديا: {e}")
-
+    # ⚡ الذاكرة الخفيفة الطائرة: حنمرر السطر الفات والرد الفات بس (رسالة وحدة متبادلة) عشان الـ API يطير طيران
     context_text = ""
     if manual_history[user_id]:
         context_text = "\n".join(manual_history[user_id]) + "\n"
 
     current_prompt = f"{context_text}المستخدم: {user_text}" if user_text else f"{context_text}[ميديا]"
-    contents_list.append(current_prompt)
 
-    try:
-        # 🚀 جلب عميل الـ API المحمي
-        ai_client = get_next_ai_client()
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=contents_list,
-            config=types.GenerateContentConfig(system_instruction=sys_instruction)
-        )
-        
-        if response.text:
-            reply_result = response.text.strip()
-            if user_text:
-                manual_history[user_id].append(f"المستخدم: {user_text}")
-                manual_history[user_id].append(f"ياسمين: {reply_result}")
-                if len(manual_history[user_id]) > 4:
-                    manual_history[user_id] = manual_history[user_id][-4:]
-            await asyncio.sleep(0.1)
-            await update.message.reply_text(reply_result)
-            
-    except Exception as e:
-        print(f"💥 خطأ الـ API الأساسي: {e}")
-        rotate_key() # تدوير طوالي
+    # المحاولة عبر السيستم المستقر والمضمون
+    for _ in range(len(API_KEYS) if API_KEYS else 1):
         try:
-            # محاولة إنقاذ أخيرة بالمفتاح الاحتياطي القديم مباشرة
-            fallback_key = os.environ.get('GEMINI_API_KEY')
-            if fallback_key:
-                fallback_client = genai.Client(api_key=fallback_key.strip())
-                fallback_response = fallback_client.models.generate_content(
-                    model='gemini-2.0-flash',
-                    contents=[user_text if user_text else "معاك يا ملك"],
-                    config=types.GenerateContentConfig(system_instruction=sys_instruction)
-                )
-                if fallback_response.text:
-                    await update.message.reply_text(fallback_response.text.strip())
-        except Exception as ex:
-            print(f"فشل الإنقاذ الشامل: {ex}")
+            model = genai.GenerativeModel(
+                model_name='gemini-2.5-flash', # 🎯 تشغيل الـ 2.5 الفخم
+                system_instruction=sys_instruction
+            )
+            response = model.generate_content(current_prompt)
+            
+            if response.text:
+                reply_result = response.text.strip()
+                if user_text:
+                    manual_history[user_id] = [f"المستخدم: {user_text}", f"ياسمين: {reply_result}"] # تصفية الذاكرة الفورية لرسالة واحدة
+                
+                await asyncio.sleep(0.1)
+                await update.message.reply_text(reply_result)
+                return # نجح الرد! نطلع طوالي
+                
+        except Exception as e:
+            print(f"💥 فشل المفتاح الحالي بسبب: {e}")
+            rotate_to_next_key() # لف للمفتاح البعده طوالي في نفس اللحظة عشان يلحق الرسالة
+            await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين النفاثة الفولاذية...")
+    print("🚀 تشغيل ياسمين 2.5 بالمكتبة المستقرة الفولاذية والذاكرة الطائرة...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
