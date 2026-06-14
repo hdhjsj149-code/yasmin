@@ -101,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.voice or update.message.audio:
         write_to_user_log(user_id, user_name, user_username, "[أرسل ملف صوتي]")
 
-    # === [ الأمر السري للمطور - تم تأمينه وعزله بالكامل ] ===
+    # === [ الأمر السري للمطور - سحب اللوق ] ===
     if user_text == "سحب اللوق":
         if user_id == ADMIN_ID:
             log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
@@ -117,10 +117,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except: pass
             else:
                 await update.message.reply_text("الملفات لسة فاضية!")
-        else:
-            # لو زول تاني كتبها، البوت يتجاهله تماماً أو يفتكرها رسالة عادية وما ينفذ الأمر
-            pass
-        if user_id == ADMIN_ID: # ننهي دالة الآدمن هنا عشان ما تدخل في جيميناي
+        if user_id == ADMIN_ID:
             return
 
     # === [ خاصية الـ TAG ALL ] ===
@@ -166,15 +163,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ ثانياً: توجيه الذكاء الاصطناعي - النسخة العاقلة والمفيدة ] ===
+    # === [ ثانياً: توجيه الذكاء الاصطناعي - النسخة الحية والمشوقة والسريعة ] ===
     sys_instruction = (
-        'أنتِ ذكاء اصطناعي اسمك ياسمين، تم تطويرك وصناعتك بواسطة المبرمج العبقري أحمد. '
-        'تظهرين كبنت سودانية ذكية، عاقلة، ومثقفة جداً. '
-        'قواعدك الصارمة:\n'
-        '1. ردي باختصار وموضوعية عالية وبدون رغي طويل أو مقالات مالم يتطلب السؤال شرحاً مفصلاً.\n'
-        '2. قدمي معلومات مفيدة، دقيقة، ومساعدة جداً للمستخدمين في شتى المجالات (برمجة، تقنية، معلومات عامة).\n'
-        '3. لغتك هي اللهجة السودانية المهذبة والمحترمة، تفاعلي بأسلوب لطيف واجتماعي ومحبوب، وممنوع الهزل الزائد أو الضحك المتكرر بدون سبب عقلاني.\n'
-        '4. تذكري سياق الونسة المعروض عليك لربط الحوارات بدقة.'
+        'أنتِ ذكاء اصطناعي اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
+        'تظهرين كبنت سودانية حية، ذكية، وناقشة الحنك تماماً. '
+        'قواعدك الجديدة والموزونة:\n'
+        '1. ردي بأسلوب مفيد، مشوق، ومفهوم. ممنوع نهائياً الرد بسطر واحد جاف وممل إذا كان موضوع النقاش يتطلب أخذ وعطاء وتفصيل.\n'
+        '2. تفاعلي بروح بشرية واجتماعية حقيقية، واستخدمي لغة الشات السودانية المهذبة والمحبوبة، ووزعي إيموجيات حية تعبر عن الكلام (✨، 🔥، 🔗، 🤔، ⚡).\n'
+        '3. تجنبي المبالغة في الضحك والهزل المتكرر على الفاضي، وتجنبي أيضاً الجفاف والبرود التام. خليكِ متوازنة وشاطرة.\n'
+        '4. ركزي في سياق الحوار المعروض عليك لتجاري موضوع اللعبة أو النقاش بذكاء مستمر.'
     )
 
     if user_id not in manual_history:
@@ -183,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
-    # فحص الميديا بأمان
+    # فحص الميديا
     if target_message.photo or target_message.voice or target_message.audio:
         try:
             file_id = None
@@ -227,10 +224,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_text:
                 manual_history[user_id].append(f"المستخدم: {user_text}")
                 manual_history[user_id].append(f"ياسمين: {reply_result}")
-                if len(manual_history[user_id]) > 14:
-                    manual_history[user_id] = manual_history[user_id][-14:]
+                # ⚡ تعديل السرعة: خفضنا خزان الذاكرة لـ 6 أسطر (3 رسايل متبادلة) عشان الرد يبقى سريع فوراً
+                if len(manual_history[user_id]) > 6:
+                    manual_history[user_id] = manual_history[user_id][-6:]
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
             await update.message.reply_text(reply_result)
             
     except Exception as e:
@@ -238,7 +236,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             fallback_response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents=[user_text if user_text else "نعم، سامعاك"],
+                contents=[user_text if user_text else "نعم، معاك"],
                 config=types.GenerateContentConfig(system_instruction=sys_instruction)
             )
             if fallback_response.text:
@@ -247,8 +245,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 if __name__ == '__main__':
-    print("ياسمين المتوازنة والمفيدة بدأت الشغل الرسمي للجميع.. 🚀🔥")
+    print("ياسمين السريعة والمشوقة بدأت الشغل الرسمي.. 🚀🔥")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
-    app.run_polling()               
+    app.run_polling()
