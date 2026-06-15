@@ -2,7 +2,6 @@ import os
 import threading
 import time
 import requests
-import random  # 🎲 مكتبة العشوائية لنظام التقل
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -37,7 +36,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام فقط
+ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -48,6 +47,8 @@ API_KEYS = [
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
 
 current_key_index = 0
+BOT_USERNAME = ""
+BOT_ID = None
 
 def get_next_ai_client():
     global current_key_index
@@ -76,6 +77,7 @@ def write_to_user_log(user_id, user_name, user_username, text):
     except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global BOT_USERNAME, BOT_ID
     if not update.message: return
 
     chat_id = update.message.chat_id
@@ -124,7 +126,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # الردود التلقائية الثابتة السريعة
+    # الردود التلقائية الثابتة السريعة (تشتغل طوالي بدون شروط تانية)
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -141,18 +143,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🎲 [وزنة التقل الذكي للمجموعات]: منع الزحمة والجوطة
-    if is_group:
-        bot_user = await context.bot.get_me()
-        bot_username = f"@{bot_user.username}"
-        
-        is_explicit = (user_text and (bot_username in user_text or "ياسمين" in user_text))
-        is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
-        
-        # لو ما نادوها مخصصة، بتدخل بنسبة 25% من الونسة العامة عشان تظهر رصينة وثقيلة وما تجوط الشات
-        if not (is_explicit or is_direct_reply):
-            if random.random() > 0.25:
-                return
+    # 🔒 [قفل فكرتك الذكية]: فحص شروط المناداة أو الريبلاي المباشر
+    is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
+    is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
+    
+    # في المجموعات: لو ما منشنوها صراحة ولو ما ردو على رسالتها، الكود حيقيف هنا ومستحيل يزعج الـ API
+    if is_group and not (is_explicit or is_direct_reply):
+        return
 
     # تحديد التوجيه وضبط المقالات الطويلة
     is_religious = False
@@ -176,7 +173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
         )
 
-    # معالجة الميديا الخفيفة السريعة
+    # معالجة الميديا
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -197,11 +194,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    # 🚀 تصفير الشحنة (تأمين عدم التهنير): نرسل الطلب الحالي فقط لضمان بقاء السيرفر خفيفاً وسريعاً للأبد
     current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا]"
     contents_list.append(current_prompt)
 
-    for _ in range(len(API_KEYS) if API_KEYS else 1):
+    # حلقة المحاولات وتدوير المفاتيح
+    loops_count = len(API_KEYS) if API_KEYS else 1
+    for _ in range(loops_count):
         try:
             ai_client = get_next_ai_client()
             response = ai_client.models.generate_content(
@@ -219,11 +217,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"💥 خطأ الـ API الحديث 2.5: {e}")
             rotate_key()
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(5)  # نوم خفيف للحماية عند التدوير
+
+async def on_startup(app):
+    global BOT_USERNAME, BOT_ID
+    bot_info = await app.bot.get_me()
+    BOT_USERNAME = f"@{bot_info.username}"
+    BOT_ID = bot_info.id
+    print(f"🚀 تم سحب بيانات البوت بنجاح: {BOT_USERNAME} | ID: {BOT_ID}")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية بنظام السرعة الدائمة وعدم التهنير...")
+    print("🚀 تشغيل ياسمين بنظام المناداة والريبلاي الصارم...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(on_startup(app))
+    
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
     app.run_polling()
