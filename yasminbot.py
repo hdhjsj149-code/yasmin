@@ -29,6 +29,7 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 import io
 import datetime
 import asyncio
+import zipfile
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -64,15 +65,15 @@ def rotate_key():
 group_members = {}
 manual_history = {}
 
-# 📝 دالة اللوق الموحد الشامل (مستحيل تفوت حاجة)
-def write_to_master_log(chat_id, user_id, user_name, user_username, chat_type, text_content):
+def write_to_user_log(user_id, user_name, user_username, text):
     try:
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_line = f"[{current_time}] | الجروب/الشات: {chat_id} ({chat_type}) | المستخدم: {user_name} ({user_username} - ID: {user_id}) -> {text_content}\n"
-        with open("yasmin_master_log.txt", "a", encoding="utf-8") as f:
-            f.write(log_line)
-    except Exception as e: 
-        print(f"خطأ كتابة اللوق الموحد: {e}")
+        safe_name = "".join([c for c in user_name if c.isalpha() or c.isdigit() or c==' ']).strip()
+        if not safe_name: safe_name = "User"
+        filename = f"log_{user_id}_{safe_name}.txt"
+        log_line = f"[{current_time}] | {user_username} | {text}\n"
+        with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
+    except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message: return
@@ -80,11 +81,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     user = update.message.from_user
     user_id = user.id if user else chat_id
-    chat_type = update.message.chat.type
-    is_group = chat_type in ['group', 'supergroup']
+    is_group = update.message.chat.type in ['group', 'supergroup']
     
     user_name = user.first_name if user else "مستخدم غير معروف"
-    user_username = f"@{user.username}" if user and user.username else "لا يوجد يوزر"
+    user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
     if is_group:
         if chat_id not in group_members: group_members[chat_id] = set()
@@ -95,25 +95,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # تحديد نوع الميديا للوق
-    media_type = "نص"
-    if update.message.photo: media_type = "[صورة]"
-    elif update.message.video: media_type = "[فيديو]"
-    elif update.message.voice or update.message.audio: media_type = "[ملف صوتي]"
-
-    log_payload = f"الرسالة: {user_text}" if user_text else media_type
-
-    # === سحب اللوق الشامل (للآدمن فقط) ===
-    if user_text == "سحب اللوق" and user_id == ADMIN_ID:
-        if os.path.exists("yasmin_master_log.txt"):
-            await update.message.reply_text("تفضل يا مَلك، جاري سحب اللوق الموحد الشامل... 📊📦")
-            with open("yasmin_master_log.txt", "rb") as master_file:
-                await context.bot.send_document(chat_id=chat_id, document=master_file, filename="yasmin_master_log.txt")
-        else:
-            await update.message.reply_text("الملف الموحد لسة ما سجل حركة يا ملك! 📝")
-        return
-
-    # 🛑 فحص أمن التدخل للمجموعات (البوت بيسجل لوق الكل، بس ما بيرد إلا لو نادوه)
+    # 🛑 فحص أمن التدخل الذكي للمجموعات (تسجيل اللوق دايماً، والرد عند النداء فقط)
     if is_group:
         bot_user = await context.bot.get_me()
         bot_username = f"@{bot_user.username}"
@@ -121,14 +103,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_mentioned = (user_text and (bot_username in user_text or "ياسمين" in user_text))
         is_reply_to_bot = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
         
-        # بنسجل اللوق الموحد طوالي عشان تراقبه، وبعدها نحدد هل نرد ولا نسكت
-        write_to_master_log(chat_id, user_id, user_name, user_username, chat_type, log_payload)
+        # بنسجل الحركة في اللوق الشامل طوالي عشان تشوفها بالليل، وبعدها نحدد نرد ولا نسكت
+        if user_text: write_to_user_log(user_id, user_name, user_username, f"استماع جروب: {user_text}")
         
         if not (is_mentioned or is_reply_to_bot):
             return
     else:
         # لو في الخاص، بنسجل طوالي ونمشي على الرد
-        write_to_master_log(chat_id, user_id, user_name, user_username, chat_type, log_payload)
+        if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
+        elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
+        elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
+        elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
+
+    # === سحب اللوق ===
+    if user_text == "سحب اللوق" and user_id == ADMIN_ID:
+        log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
+        if log_files:
+            await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق... 📦⏳")
+            zip_filename = "all_users_logs.zip"
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in log_files: zipf.write(file)
+            with open(zip_filename, "rb") as log_zip:
+                await context.bot.send_document(chat_id=chat_id, document=log_zip, filename=zip_filename)
+            try: os.remove(zip_filename)
+            except: pass
+        return
 
     # === TAG ALL ===
     if user_text.lower() in ['تاق', '@all', 'تاغ']:
@@ -142,7 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك? ✨',
+        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
@@ -156,7 +155,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # تخصيص الشخصية الذكية
+    # توجيه الشخصية المرن والموزون
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -180,7 +179,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    # سحب الميديا
+    # معالجة الميديا المؤمّنة بالكامل
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -231,7 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية بنظام اللوق الموحد الشامل...")
+    print("🚀 تشغيل ياسمين الفولاذية الذكية (الموزونة بالكامل)...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
