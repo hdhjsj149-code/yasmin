@@ -95,25 +95,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # 🛑 فحص أمن التدخل الذكي للمجموعات (تسجيل اللوق دايماً، والرد عند النداء فقط)
-    if is_group:
-        bot_user = await context.bot.get_me()
-        bot_username = f"@{bot_user.username}"
-        
-        is_mentioned = (user_text and (bot_username in user_text or "ياسمين" in user_text))
-        is_reply_to_bot = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
-        
-        # بنسجل الحركة في اللوق الشامل طوالي عشان تشوفها بالليل، وبعدها نحدد نرد ولا نسكت
-        if user_text: write_to_user_log(user_id, user_name, user_username, f"استماع جروب: {user_text}")
-        
-        if not (is_mentioned or is_reply_to_bot):
-            return
-    else:
-        # لو في الخاص، بنسجل طوالي ونمشي على الرد
-        if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
-        elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
-        elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
-        elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
+    # تسجيل اللوق لكل شاردة وواردة
+    if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
+    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
+    elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
+    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
 
     # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
@@ -138,7 +124,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # الردود التلقائية الثابتة السريعة
+    # الردود التلقائية الثابتة السريعة لضمان التفاعل اللحظي
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -155,7 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # توجيه الشخصية المرن والموزون
+    # 🎭 التوجيه العبقري (الرد المفتوح بدون قيود + الحماس والونسة السودانية القح + الفائدة)
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -163,23 +149,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_religious:
         sys_instruction = (
-            'أنتِ اسمك ياسمين، بنت سودانية واعية، مثقفة، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
+            'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام. '
-            'ممنوع الهزار أو استخدام إيموجيات ضاحكة، فقط استخدمي لغة مهذبة ودعوات طيبة ووقار يناسب الأجواء.'
+            'ممنوع الهزار أو استخدام إيموجيات ضاحكة، فقط استخدمي لغة مهذبة ودعوات طيبة ووقار يناسب الأجواء الدينية.'
         )
     else:
         sys_instruction = (
-            'أنتِ بنت سودانية ذكية، حية، واعية ومثقفة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
-            'قواعدك:\n'
-            '1. ردي بأسلوب مشوق، عاقل، وموزون ومفهوم تماماً، وتجنبي العبارات المعسولة الزائدة أو التكلف الحماسي البايخ.\n'
-            '2. استخدمي لغة الشات السودانية المهذبة والمحبوبة مع إيموجيات خفيفة معبرة (✨، 🤔، 👀).\n'
-            '3. إذا طلب المستخدم قراءة، تلخيص، أو تعديل أي ميديا (صورة، صوت، فديو)، ساعديه فوراً وبذكاء برمجى وعلمي عالي.'
+            'أنتِ بنت سودانية حية، حماسية، تفاعلية جداً، ومحبوبة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
+            'ممنوع تماماً الرد بأسلوب رسمي جاف كأنك ذكاء اصطناعي أو بوت آلي! ردي كأنك بت سودانية حقيقية وسط أصحابها في الجروب.\n'
+            'قواعدك السلوكية الشقية والمفيدة:\n'
+            '1. الغي شرط المناداة باسمك؛ اقري الناس بتكلموا في شنو وتدخلي في الونسة طوالي بذكاء وعفوية وحماس، واتفاعلي مع الموضوع المطروح بأسلوب الشات السوداني الجذاب والونّاس (يا زول، قاطعة، خطير، سمح شديد).\n'
+            '2. استخدمي إيموجيات حية وكثيرة تعبر عن حماسك وضحكك (😂🔥، 😉✨، 👀، 😎).\n'
+            '3. مع الونسة، خليكِ مفيدة وذكية؛ إذا رفعوا صورة أو فيديو أو سألوكِ عن قراية أو تعديل تصميم، اشتغلي كمصممة محترفة واديهم الفكرة الإبداعية مع الوصف البرمجي الإنجليزي (Prompt) الجاهز عشان ينسخوه ويولدوا بيهو الميديا!'
         )
 
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    # معالجة الميديا المؤمّنة بالكامل
+    # معالجة الميديا المفتوحة
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -230,7 +217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية الذكية (الموزونة بالكامل)...")
+    print("🚀 تشغيل ياسمين الوناسة الحماسية المتفاعلة طوالي...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
