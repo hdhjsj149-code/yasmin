@@ -88,6 +88,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = user.first_name if user else "مستخدم غير معروف"
     user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
+    # تأمين جلب بيانات البوت لو ما كانت اتملت
+    if not BOT_USERNAME or not BOT_ID:
+        try:
+            bot_info = await context.bot.get_me()
+            BOT_USERNAME = f"@{bot_info.username}"
+            BOT_ID = bot_info.id
+        except Exception as e:
+            print(f"فشل سحب بيانات البوت أثناء التشغيل: {e}")
+
     if is_group:
         if chat_id not in group_members: group_members[chat_id] = set()
         if user and user.username: group_members[chat_id].add(f"@{user.username}")
@@ -126,10 +135,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # الردود التلقائية الثابتة السريعة (تشتغل طوالي بدون شروط تانية)
+    # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
+        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك? ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
@@ -143,15 +152,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🔒 [قفل فكرتك الذكية]: فحص شروط المناداة أو الريبلاي المباشر
+    # 🔒 فحص المناداة والريبلاي الصارم
     is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
     is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
     
-    # في المجموعات: لو ما منشنوها صراحة ولو ما ردو على رسالتها، الكود حيقيف هنا ومستحيل يزعج الـ API
     if is_group and not (is_explicit or is_direct_reply):
         return
 
-    # تحديد التوجيه وضبط المقالات الطويلة
+    # تحديد التوجيه وشخصية ياسمين
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -173,7 +181,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
         )
 
-    # معالجة الميديا
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -197,7 +204,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا]"
     contents_list.append(current_prompt)
 
-    # حلقة المحاولات وتدوير المفاتيح
     loops_count = len(API_KEYS) if API_KEYS else 1
     for _ in range(loops_count):
         try:
@@ -217,21 +223,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"💥 خطأ الـ API الحديث 2.5: {e}")
             rotate_key()
-            await asyncio.sleep(5)  # نوم خفيف للحماية عند التدوير
-
-async def on_startup(app):
-    global BOT_USERNAME, BOT_ID
-    bot_info = await app.bot.get_me()
-    BOT_USERNAME = f"@{bot_info.username}"
-    BOT_ID = bot_info.id
-    print(f"🚀 تم سحب بيانات البوت بنجاح: {BOT_USERNAME} | ID: {BOT_ID}")
+            await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين بنظام المناداة والريبلاي الصارم...")
+    print("🚀 تشغيل ياسمين الفولاذية المأمنة والمتوافقة مع بايثون الحديث...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(on_startup(app))
     
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
