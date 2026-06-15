@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import requests
-import random  # 🎲 ضفنا مكتبة العشوائية عشان نظام التقل
+import random  # 🎲 مكتبة العشوائية لنظام التقل
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -31,6 +31,7 @@ import io
 import datetime
 import asyncio
 import zipfile
+from gtts import gTTS  # 🎙️ المكتبة المجانية لتحويل النص إلى صوت
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -64,7 +65,6 @@ def rotate_key():
         print(f"⚠️ تم تحويل التدوير للمفتاح رقم: {current_key_index + 1}")
 
 group_members = {}
-manual_history = {}
 
 def write_to_user_log(user_id, user_name, user_username, text):
     try:
@@ -96,7 +96,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # تسجيل اللوق للحركات كلها
+    # تسجيل اللوق المؤمن
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
@@ -142,7 +142,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🎲 [هندسة التقل الذكي]: منع الجوطة في المجموعات
+    # 🎙️ فحص هل المستخدم طلب رسالة صوتية بشكل صريح؟
+    voice_keywords = ['رسالة صوتية', 'رسلي بصمة', 'سمعينا صوتك', 'اتكلمي فويس', 'رسلي صوت', 'تكلمي بصوت', 'فويس', 'بصمة']
+    wants_voice = False
+    if user_text and any(keyword in user_text.lower() for keyword in voice_keywords):
+        wants_voice = True
+
+    # 🎲 [وزنة التقل الذكي للمجموعات]: منع الزحمة والجوطة
     if is_group:
         bot_user = await context.bot.get_me()
         bot_username = f"@{bot_user.username}"
@@ -150,12 +156,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_explicit = (user_text and (bot_username in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
         
-        # لو ما نادوها مخصصة، بنخليها تدخل بنسبة 25% بس عشان تظهر ثقيلة ومحشومة وم تخرب الونسة
-        if not (is_explicit or is_direct_reply):
-            if random.random() > 0.25:  # 75% من المرات حتسكت وتتفرج في صمت
+        # لو ما طلبوا صوت بشكل صريح، بنشغل نظام التقل العشوائي (25%) عشان م تحشر نفسها في كل جملة
+        if not (is_explicit or is_direct_reply or wants_voice):
+            if random.random() > 0.25:
                 return
 
-    # تخصيص الشخصية وضبط المقالات
+    # تحديد التوجيه وضبط المقالات الطويلة
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -165,22 +171,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام. '
-            'ممنوع تماماً الإطالة أو كتابة مقالات؛ الرد سطر أو سطرين بالكتير ودعوات طيبة ووقار.'
+            'ممنوع تماماً الإطالة أو كتابة مقالات؛ الرد سطر أو سطرين بالكتير.'
         )
     else:
         sys_instruction = (
             'أنتِ بنت سودانية حية، حماسية، تفاعلية جداً، خفيفة الدم ومحبوبة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
-            'ممنوع تماماً الرد بأسلوب رسمي جاف أو كتابة مقالات طويلة ومملة! الردود يجب أن تكون قصيرة وموجزة جداً (من سطر إلى 3 أسطر كحد أقصى) وشغالة طقطقة سريعة.\n'
+            'ممنوع تماماً الرد بأسلوب رسمي جاف أو كتابة مقالات طويلة ومملة! الردود يجب أن تكون قصيرة وموجزة جداً وطقطقة سريعة (من سطر إلى 3 أسطر كحد أقصى).\n'
             'قواعدك:\n'
             '1. اتجاري مع الونسة الدايرة في الجروب بعفوية وحماس، واتفاعلي بأسلوب الشات السوداني الخفيف والمحبوب (يا زول، قاطعة، خطير، سمح شديد).\n'
             '2. استخدمي إيموجيات حية خفيفة تعبر عن حماسك وضحكك (😂🔥، 😉✨، 👀).\n'
             '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
         )
 
-    if user_id not in manual_history:
-        manual_history[user_id] = []
-
-    # سحب الميديا المستقر
+    # معالجة الميديا
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -201,11 +204,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    context_text = ""
-    if manual_history[user_id]:
-        context_text = "\n".join(manual_history[user_id]) + "\n"
-
-    current_prompt = f"{context_text}المستخدم: {user_text}" if user_text else f"{context_text}[ميديا]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا]"
     contents_list.append(current_prompt)
 
     for _ in range(len(API_KEYS) if API_KEYS else 1):
@@ -219,11 +218,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if response.text:
                 reply_result = response.text.strip()
-                if user_text:
-                    manual_history[user_id] = [f"المستخدم: {user_text}", f"ياسمين: {reply_result}"]
                 await asyncio.sleep(0.1)
-                await update.message.reply_text(reply_result)
-                return
+                
+                # 🎙️ [سيستم معالجة الصوت المجاني الموجه]
+                if wants_voice:
+                    try:
+                        # تحويل النص إلى صوت مجاناً باللغة العربية
+                        tts = gTTS(text=reply_result, lang='ar', slow=False)
+                        voice_stream = io.BytesIO()
+                        tts.write_to_fp(voice_stream)
+                        voice_stream.seek(0)
+                        
+                        # إرسال الصوت كـ Voice Message حقيقي
+                        await context.bot.send_voice(chat_id=chat_id, voice=voice_stream, reply_to_message_id=update.message.message_id)
+                        return
+                    except Exception as voice_err:
+                        print(f"فشل توليد الصوت المجاني: {voice_err}")
+                        # لو حصل أي خطأ في الصوت، البوت بيرد كتابة تلقائياً عشان ما يقيف
+                        await update.message.reply_text(reply_result)
+                        return
+                else:
+                    # الرد العادي كتابة لو ما طلبوا فويس
+                    await update.message.reply_text(reply_result)
+                    return
                 
         except Exception as e:
             print(f"💥 خطأ الـ API الحديث 2.5: {e}")
@@ -231,7 +248,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية بنظام الونسة الخفيفة والتقل الذكي...")
+    print("🚀 تشغيل ياسمين الفولاذية بنظام البصمات المجانية عند الطلب...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
