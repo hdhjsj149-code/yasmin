@@ -31,7 +31,6 @@ import io
 import datetime
 import asyncio
 import zipfile
-from gtts import gTTS  # 🎙️ المكتبة المجانية لتحويل النص إلى صوت
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -142,12 +141,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🎙️ فحص هل المستخدم طلب رسالة صوتية بشكل صريح؟
-    voice_keywords = ['رسالة صوتية', 'رسلي بصمة', 'سمعينا صوتك', 'اتكلمي فويس', 'رسلي صوت', 'تكلمي بصوت', 'فويس', 'بصمة']
-    wants_voice = False
-    if user_text and any(keyword in user_text.lower() for keyword in voice_keywords):
-        wants_voice = True
-
     # 🎲 [وزنة التقل الذكي للمجموعات]: منع الزحمة والجوطة
     if is_group:
         bot_user = await context.bot.get_me()
@@ -156,8 +149,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_explicit = (user_text and (bot_username in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
         
-        # لو ما طلبوا صوت بشكل صريح، بنشغل نظام التقل العشوائي (25%) عشان م تحشر نفسها في كل جملة
-        if not (is_explicit or is_direct_reply or wants_voice):
+        # لو ما نادوها مخصصة، بتدخل بنسبة 25% من الونسة العامة عشان تظهر رصينة وثقيلة وما تجوط الشات
+        if not (is_explicit or is_direct_reply):
             if random.random() > 0.25:
                 return
 
@@ -183,7 +176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
         )
 
-    # معالجة الميديا
+    # معالجة الميديا الخفيفة السريعة
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -204,6 +197,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
+    # 🚀 تصفير الشحنة (تأمين عدم التهنير): نرسل الطلب الحالي فقط لضمان بقاء السيرفر خفيفاً وسريعاً للأبد
     current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا]"
     contents_list.append(current_prompt)
 
@@ -219,28 +213,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response.text:
                 reply_result = response.text.strip()
                 await asyncio.sleep(0.1)
-                
-                # 🎙️ [سيستم معالجة الصوت المجاني الموجه]
-                if wants_voice:
-                    try:
-                        # تحويل النص إلى صوت مجاناً باللغة العربية
-                        tts = gTTS(text=reply_result, lang='ar', slow=False)
-                        voice_stream = io.BytesIO()
-                        tts.write_to_fp(voice_stream)
-                        voice_stream.seek(0)
-                        
-                        # إرسال الصوت كـ Voice Message حقيقي
-                        await context.bot.send_voice(chat_id=chat_id, voice=voice_stream, reply_to_message_id=update.message.message_id)
-                        return
-                    except Exception as voice_err:
-                        print(f"فشل توليد الصوت المجاني: {voice_err}")
-                        # لو حصل أي خطأ في الصوت، البوت بيرد كتابة تلقائياً عشان ما يقيف
-                        await update.message.reply_text(reply_result)
-                        return
-                else:
-                    # الرد العادي كتابة لو ما طلبوا فويس
-                    await update.message.reply_text(reply_result)
-                    return
+                await update.message.reply_text(reply_result)
+                return
                 
         except Exception as e:
             print(f"💥 خطأ الـ API الحديث 2.5: {e}")
@@ -248,7 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية بنظام البصمات المجانية عند الطلب...")
+    print("🚀 تشغيل ياسمين الفولاذية بنظام السرعة الدائمة وعدم التهنير...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
