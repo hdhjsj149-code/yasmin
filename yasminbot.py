@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import requests
+import random  # 🎲 ضفنا مكتبة العشوائية عشان نظام التقل
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -95,7 +96,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # تسجيل اللوق لكل شاردة وواردة
+    # تسجيل اللوق للحركات كلها
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
@@ -124,7 +125,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # الردود التلقائية الثابتة السريعة لضمان التفاعل اللحظي
+    # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -141,7 +142,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🎭 التوجيه العبقري (الرد المفتوح بدون قيود + الحماس والونسة السودانية القح + الفائدة)
+    # 🎲 [هندسة التقل الذكي]: منع الجوطة في المجموعات
+    if is_group:
+        bot_user = await context.bot.get_me()
+        bot_username = f"@{bot_user.username}"
+        
+        is_explicit = (user_text and (bot_username in user_text or "ياسمين" in user_text))
+        is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
+        
+        # لو ما نادوها مخصصة، بنخليها تدخل بنسبة 25% بس عشان تظهر ثقيلة ومحشومة وم تخرب الونسة
+        if not (is_explicit or is_direct_reply):
+            if random.random() > 0.25:  # 75% من المرات حتسكت وتتفرج في صمت
+                return
+
+    # تخصيص الشخصية وضبط المقالات
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -151,22 +165,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام. '
-            'ممنوع الهزار أو استخدام إيموجيات ضاحكة، فقط استخدمي لغة مهذبة ودعوات طيبة ووقار يناسب الأجواء الدينية.'
+            'ممنوع تماماً الإطالة أو كتابة مقالات؛ الرد سطر أو سطرين بالكتير ودعوات طيبة ووقار.'
         )
     else:
         sys_instruction = (
-            'أنتِ بنت سودانية حية، حماسية، تفاعلية جداً، ومحبوبة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
-            'ممنوع تماماً الرد بأسلوب رسمي جاف كأنك ذكاء اصطناعي أو بوت آلي! ردي كأنك بت سودانية حقيقية وسط أصحابها في الجروب.\n'
-            'قواعدك السلوكية الشقية والمفيدة:\n'
-            '1. الغي شرط المناداة باسمك؛ اقري الناس بتكلموا في شنو وتدخلي في الونسة طوالي بذكاء وعفوية وحماس، واتفاعلي مع الموضوع المطروح بأسلوب الشات السوداني الجذاب والونّاس (يا زول، قاطعة، خطير، سمح شديد).\n'
-            '2. استخدمي إيموجيات حية وكثيرة تعبر عن حماسك وضحكك (😂🔥، 😉✨، 👀، 😎).\n'
-            '3. مع الونسة، خليكِ مفيدة وذكية؛ إذا رفعوا صورة أو فيديو أو سألوكِ عن قراية أو تعديل تصميم، اشتغلي كمصممة محترفة واديهم الفكرة الإبداعية مع الوصف البرمجي الإنجليزي (Prompt) الجاهز عشان ينسخوه ويولدوا بيهو الميديا!'
+            'أنتِ بنت سودانية حية، حماسية، تفاعلية جداً، خفيفة الدم ومحبوبة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
+            'ممنوع تماماً الرد بأسلوب رسمي جاف أو كتابة مقالات طويلة ومملة! الردود يجب أن تكون قصيرة وموجزة جداً (من سطر إلى 3 أسطر كحد أقصى) وشغالة طقطقة سريعة.\n'
+            'قواعدك:\n'
+            '1. اتجاري مع الونسة الدايرة في الجروب بعفوية وحماس، واتفاعلي بأسلوب الشات السوداني الخفيف والمحبوب (يا زول، قاطعة، خطير، سمح شديد).\n'
+            '2. استخدمي إيموجيات حية خفيفة تعبر عن حماسك وضحكك (😂🔥، 😉✨، 👀).\n'
+            '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
         )
 
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    # معالجة الميديا المفتوحة
+    # سحب الميديا المستقر
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
@@ -217,7 +231,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الوناسة الحماسية المتفاعلة طوالي...")
+    print("🚀 تشغيل ياسمين الفولاذية بنظام الونسة الخفيفة والتقل الذكي...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
