@@ -36,7 +36,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598
+ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام فقط
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -81,11 +81,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     user = update.message.from_user
     user_id = user.id if user else chat_id
+    is_group = update.message.chat.type in ['group', 'supergroup']
     
     user_name = user.first_name if user else "مستخدم غير معروف"
     user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
-    if update.message.chat.type in ['group', 'supergroup']:
+    if is_group:
         if chat_id not in group_members: group_members[chat_id] = set()
         if user and user.username: group_members[chat_id].add(f"@{user.username}")
         elif user: group_members[chat_id].add(f"[{user.first_name}](tg://user?id={user.id})")
@@ -94,10 +95,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
+    # 🛑 فحص أمن التدخل الصارم للمجموعات (حظر التدخل في الفديوهات والميديا بدون إذن)
+    if is_group:
+        bot_user = await context.bot.get_me()
+        bot_username = f"@{bot_user.username}"
+        
+        is_mentioned = (user_text and (bot_username in user_text or "ياسمين" in user_text))
+        is_reply_to_bot = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot_user.id)
+        
+        # لو ما نادوها بالاسم أو عملوا ريبلاي.. تسكت تماماً وتتفرج حتى لو المرسل فيديو أو صورة
+        if not (is_mentioned or is_reply_to_bot):
+            if user_text: write_to_user_log(user_id, user_name, user_username, f"استماع جروب: {user_text}")
+            elif update.message.video: write_to_user_log(user_id, user_name, user_username, "استماع جروب: [فيديو صامت]")
+            return
+
+    # لو وصلنا هنا معناها يا إما خاص (شغال طوالي) أو زول ناداها رسمي جوة الجروب
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
+    elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
     elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
 
+    # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
         log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
         if log_files:
@@ -111,56 +129,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         return
 
+    # === TAG ALL ===
     if user_text.lower() in ['تاق', '@all', 'تاغ']:
-        if update.message.chat.type not in ['group', 'supergroup']: return
+        if not is_group: return
         members = group_members.get(chat_id, set())
         if not members: return
         tag_text = "📢 **نداء عاجل للجميع:**\n\n" + " ".join(list(members))
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
+    # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
-        'وین انت': 'لو مهتم كان عرفته 😎',
-        'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً ',
-        'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ ',
-        'مشتاقين': '🥺🥺',
+        'وین انت': 'معاك هنا في الحاضر طوالي 😎',
+        'صباح الخير': 'صباح الورد والبركة يا غالي 🌤️🌺',
+        'مساء الخير': 'مساء النور والسرور والرضا 🌸',
+        'مشتاقين': 'بالأكثر والله يا حبيبنا 👑✨',
     }
     
     if user_text in auto_replies:
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    sys_instruction = (
-        'أنتِ بنت سودانية حية، ذكية، واعية ومثقفة اسمك ياسمين، مطورك وصانعك هو المبرمج العبقري أحمد. '
-        'قواعدك:\n'
-        '1. ردي بأسلوب مفيد، مشوق ومفهوم تماماً، وممنوع الرد بسطر واحد جاف مالم يكن السؤال بسيطاً جداً.\n'
-        '2. استخدمي لغة الشات السودانية المهذبة والمحبوبة، ووزعي إيموجيات معبرة تزيد حيوية ونكهة الحوار (✨، 🔥، 🤔، 👀).\n'
-        '3. خليكِ سريعة ومباشرة وتجنبي الرغي الزائد أو الضحك المتكرر بدون سبب.'
-    )
+    # شخصية ياسمين الذكية
+    is_religious = False
+    religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
+    if user_text and any(word in user_text for word in religious_keywords):
+        is_religious = True
+
+    if is_religious:
+        sys_instruction = (
+            'أنتِ اسمك ياسمين، بنت سودانية واعية، مثقفة، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
+            'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام. '
+            'ممنوع الهزار أو استخدام إيموجيات ضاحكة، فقط استخدمي لغة مهذبة ودعوات طيبة ووقار يناسب الأجواء.'
+        )
+    else:
+        sys_instruction = (
+            'أنتِ بنت سودانية ذكية، حية، واعية ومثقفة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
+            'قواعدك:\n'
+            '1. ردي بأسلوب مشوق، عاقل، وموزون ومفهوم تماماً، وتجنبي العبارات المعسولة الزائدة أو التكلف الحماسي البايخ.\n'
+            '2. استخدمي لغة الشات السودانية المهذبة والمحبوبة مع إيموجيات خفيفة معبرة (✨، 🤔، 👀).\n'
+            '3. إذا طلب المستخدم قراءة، تلخيص، أو تعديل أي ميديا (صورة، صوت، فديو)، ساعديه فوراً وبذكاء برمجى وعلمي عالي.'
+        )
 
     if user_id not in manual_history:
         manual_history[user_id] = []
 
-    # 📸 [جزء الميديا المستقر دون أي تعديل في باقي الكود]
+    # معالجة الميديا المؤمّنة بالكامل
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
-    if target_message.photo or target_message.voice or target_message.audio:
+    if target_message.photo or target_message.video or target_message.voice or target_message.audio:
         try:
             file_id = None
             mime_type = None
             if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
+            elif target_message.video: file_id = target_message.video.file_id; mime_type = "video/mp4"
             elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
             elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                if tg_file.file_size <= 4 * 1024 * 1024:
+                if tg_file.file_size <= 5 * 1024 * 1024:
                     out = io.BytesIO()
                     await tg_file.download_to_memory(out)
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
@@ -196,7 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.3)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين المعتمدة 2.5 النظيفة مع الميديا...")
+    print("🚀 تشغيل ياسمين الفولاذية الذكية (الموزونة بالكامل)...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
