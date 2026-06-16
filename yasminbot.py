@@ -88,14 +88,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = user.first_name if user else "مستخدم غير معروف"
     user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
-    # تأمين جلب بيانات البوت لو ما كانت اتملت
     if not BOT_USERNAME or not BOT_ID:
         try:
             bot_info = await context.bot.get_me()
             BOT_USERNAME = f"@{bot_info.username}"
             BOT_ID = bot_info.id
-        except Exception as e:
-            print(f"فشل سحب بيانات البوت أثناء التشغيل: {e}")
+        except Exception as e: print(f"خطأ سحب بيانات البوت: {e}")
 
     if is_group:
         if chat_id not in group_members: group_members[chat_id] = set()
@@ -106,7 +104,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # تسجيل اللوق المؤمن
+    # تسجيل اللوق
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
@@ -138,7 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك? ✨',
+        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
@@ -159,7 +157,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_group and not (is_explicit or is_direct_reply):
         return
 
-    # تحديد التوجيه وشخصية ياسمين
+    # تحديد التوجيه وضبط المقالات والردود
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -167,18 +165,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_religious:
         sys_instruction = (
-            'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية ومطورتِ بواسطة أحمد. '
-            'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام. '
-            'ممنوع تماماً الإطالة أو كتابة مقالات؛ الرد سطر أو سطرين بالكتير.'
+            'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
+            'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
         )
     else:
         sys_instruction = (
-            'أنتِ بنت سودانية حية، حماسية، تفاعلية جداً، خفيفة الدم ومحبوبة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد. '
-            'ممنوع تماماً الرد بأسلوب رسمي جاف أو كتابة مقالات طويلة ومملة! الردود يجب أن تكون قصيرة وموجزة جداً وطقطقة سريعة (من سطر إلى 3 أسطر كحد أقصى).\n'
-            'قواعدك:\n'
-            '1. اتجاري مع الونسة الدايرة في الجروب بعفوية وحماس، واتفاعلي بأسلوب الشات السوداني الخفيف والمحبوب (يا زول، قاطعة، خطير، سمح شديد).\n'
-            '2. استخدمي إيموجيات حية خفيفة تعبر عن حماسك وضحكك (😂🔥، 😉✨، 👀).\n'
-            '3. إذا رفعوا صورة أو فيديو أو طلبوا فكرة تصميم، ردي باختصار شديد واديهم الفكرة والـ Prompt الموجه الإنجليزي بايجاز وبدون لف ودوران.'
+            'أنتِ بنت سودانية واعية، ذكية، محترمة ورزينة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد.\n'
+            'شخصيتك وقواعدك الصارمة:\n'
+            '1. ممنوع تماماً ومحرم عليكِ استخدام الكلمات المعسلة المبتذلة أو المياعة (مثل: يا قاطعة، يا حلوة، تعسيل الكلام، إلخ). كوني محترمة وثقيلة.\n'
+            '2. مرونة الردود وحجمها: إذا كان سؤال المستخدم جاداً، أو علمياً، أو موضوعاً يتطلب شرحاً أو قصة طويلة، ردي بالتفصيل الكامل والشرح الوافي والمقنع، ولا تختصري الرد في سطر واحد؛ أعطي كل سؤال حقه من المعرفة والبيانات.\n'
+            '3. الونسة الخفيفة: استخدمي اللهجة السودانية الراقية (يا زول، حبابك، سمح) فقط عندما يكون السياق عبارة عن مزاح أو ونسة عامة خفيفة وبدون مبالغة.\n'
+            '4. استخدمي الإيموجيات الحية بذكاء وفي مكانها المناسب (🌹، تبتسم، 👀) وممنوع الضحك الهستيري (😂😂) في المواضيع الجادة.'
         )
 
     contents_list = []
@@ -226,9 +223,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية المأمنة والمتوافقة مع بايثون الحديث...")
+    print("🚀 تشغيل ياسمين بنسخة العقل، الرزانة، والردود المفصلة الجادة...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
     app.run_polling()
