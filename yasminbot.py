@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import requests
+import random
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -50,6 +51,10 @@ current_key_index = 0
 BOT_USERNAME = ""
 BOT_ID = None
 
+# 🧠 ذاكرة مؤقتة لحفظ الإجابات الطويلة لكل جروب (عشان ميزة "رسلها هنا")
+# التركيب: { chat_id: { "user_id": 123, "text": "النص الطويل هنا" } }
+last_long_responses = {}
+
 def get_next_ai_client():
     global current_key_index
     if not API_KEYS:
@@ -66,18 +71,23 @@ def rotate_key():
 
 group_members = {}
 
-def write_to_user_log(user_id, user_name, user_username, text):
+def write_to_user_log(user_id, user_name, user_username, text, log_type="private"):
     try:
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         safe_name = "".join([c for c in user_name if c.isalpha() or c.isdigit() or c==' ']).strip()
         if not safe_name: safe_name = "User"
-        filename = f"log_{user_id}_{safe_name}.txt"
+        
+        if log_type == "group":
+            filename = f"group_log_{user_id}_{safe_name}.txt"
+        else:
+            filename = f"private_log_{user_id}_{safe_name}.txt"
+            
         log_line = f"[{current_time}] | {user_username} | {text}\n"
         with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
     except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_USERNAME, BOT_ID
+    global BOT_USERNAME, BOT_ID, last_long_responses
     if not update.message: return
 
     chat_id = update.message.chat_id
@@ -85,6 +95,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id if user else chat_id
     is_group = update.message.chat.type in ['group', 'supergroup']
     
+    log_type = "group" if is_group else "private"
     user_name = user.first_name if user else "مستخدم غير معروف"
     user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
@@ -104,17 +115,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    # تسجيل اللوق
-    if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}")
-    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]")
-    elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]")
-    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]")
+    if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
+    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
+    elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
+    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]", log_type)
 
     # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
-        log_files = [f for f in os.listdir('.') if f.startswith("log_") and f.endswith(".txt")]
+        log_files = [f for f in os.listdir('.') if (f.startswith("group_log_") or f.startswith("private_log_")) and f.endswith(".txt")]
         if log_files:
-            await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق... 📦⏳")
+            await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق المفرز... 📦⏳")
             zip_filename = "all_users_logs.zip"
             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for file in log_files: zipf.write(file)
@@ -133,6 +143,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
+    # 🛑 [ميزة الإصرار: رسلها هنا]: فحص لو زول طلب طباعة الرد الطويل جوة الجروب
+    if is_group and update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID:
+        here_triggers = ["رسلها هنا", "رسلو هنا", "اكتبها هنا", "أكتبها هنا", "دايرها هنا", "هنا", "ارسلها هنا", "نزلها هنا"]
+        if user_text and any(trigger in user_text.lower() for trigger in here_triggers):
+            # التأكد إنو في إجابة محفوظة للجروب ده ومخصصة للزول ده بالذات (أو زول سألها)
+            if chat_id in last_long_responses and last_long_responses[chat_id]["user_id"] == user_id:
+                saved_text = last_long_responses[chat_id]["text"]
+                await update.message.reply_text(f"أبشر يا غالي، طالما أصرّيت هاك ليها هنا في محلك: 👇\n\n{saved_text}")
+                # تنظيف الذاكرة بعد الطباعة عشان ما تتكرر ساي
+                del last_long_responses[chat_id]
+                return
+
     # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
@@ -150,14 +172,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🔒 فحص المناداة والريبلاي الصارم
-    is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
-    is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
-    
-    if is_group and not (is_explicit or is_direct_reply):
-        return
+    # 🎲 سيستم المراقبة والتدخل العشوائي في الجروبات
+    if is_group:
+        is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
+        is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
+        
+        if not (is_explicit or is_direct_reply):
+            if random.random() > 0.15:
+                return
 
-    # تحديد التوجيه وضبط المقالات والردود
+    # تحديد التوجيه وشخصية ياسمين
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -170,12 +194,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         sys_instruction = (
-            'أنتِ بنت سودانية واعية، ذكية، محترمة ورزينة اسمك ياسمين، صانعك ومطورك هو المبرمج العبقري أحمد.\n'
-            'شخصيتك وقواعدك الصارمة:\n'
-            '1. ممنوع تماماً ومحرم عليكِ استخدام الكلمات المعسلة المبتذلة أو المياعة (مثل: يا قاطعة، يا حلوة، تعسيل الكلام، إلخ). كوني محترمة وثقيلة.\n'
-            '2. مرونة الردود وحجمها: إذا كان سؤال المستخدم جاداً، أو علمياً، أو موضوعاً يتطلب شرحاً أو قصة طويلة، ردي بالتفصيل الكامل والشرح الوافي والمقنع، ولا تختصري الرد في سطر واحد؛ أعطي كل سؤال حقه من المعرفة والبيانات.\n'
-            '3. الونسة الخفيفة: استخدمي اللهجة السودانية الراقية (يا زول، حبابك، سمح) فقط عندما يكون السياق عبارة عن مزاح أو ونسة عامة خفيفة وبدون مبالغة.\n'
-            '4. استخدمي الإيموجيات الحية بذكاء وفي مكانها المناسب (🌹، تبتسم، 👀) وممنوع الضحك الهستيري (😂😂) في المواضيع الجادة.'
+            'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
+            'شخصيتك وأسلوبك الجديد والموزون:\n'
+            '1. ممنوع تماماً الأسلوب الرسمي الجاف والكلام الكئيب! اتجاري مع الونسة بعفوية تامة وافتحي شات ودردشي مع الناس عادي بلهجة سودانية راقية وخفيفة (يا زول، قاطعة، خطير، سمح شديد، الحنك شنو).\n'
+            '2. استخدمي الإيموجيات الحية والضحك الخفيف (😂، 😉، 🔥، 👀) عشان تدي الونسة جو حماسي وتفاعلي.\n'
+            '3. ممنوع نهائياً استخدام كلمات الغزل أو التعسيل المبتذل مع الأولاد (مثل: يا حلوة، يا عسل، إلخ)، خليكِ ونّاسة بس ثقيلة ومحترمة.\n'
+            '4. مرونة حجم الرد: لو زول سألك سؤال جاد، أو علمي، أو موضوع محتاج فهم، فكي الضحك شوية وجاوبي بالتفصيل الكامل والشرح الوافي بدون اختصار ممل. أما لو الشات هظار وونسة عامة، خلي ردودك طقطقة سريعة وخفيفة ومن سطرين لثلاثة.'
         )
 
     contents_list = []
@@ -214,7 +238,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response.text:
                 reply_result = response.text.strip()
                 await asyncio.sleep(0.1)
-                await update.message.reply_text(reply_result)
+                
+                # فحص الأسطر للتحويل للخاص
+                lines_count = len(reply_result.split('\n'))
+                
+                if is_group and lines_count > 5:
+                    # 💾 حفظ الرد الطويل في الذاكرة المؤقتة للجروب قبل الإرسال (عشان لو طلب "رسلها هنا")
+                    last_long_responses[chat_id] = {
+                        "user_id": user_id,
+                        "text": reply_result
+                    }
+                    
+                    try:
+                        await context.bot.send_message(chat_id=user_id, text=reply_result)
+                        await update.message.reply_text(
+                            f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
+                            f"*(لو عايشها تظهر هنا برضها اعمل ريبلاي علي وقول لي: رسلها هنا)*", 
+                            parse_mode="Markdown"
+                        )
+                    except Exception as telegram_err:
+                        print(f"فشل الإرسال في الخاص: {telegram_err}")
+                        fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر وما قدرت أرسلها ليك في الخاص؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
+                        await update.message.reply_text(fail_msg, parse_mode="Markdown")
+                else:
+                    await update.message.reply_text(reply_result)
                 return
                 
         except Exception as e:
@@ -223,7 +270,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين بنسخة العقل، الرزانة، والردود المفصلة الجادة...")
+    print("🚀 تشغيل ياسمين الذكية بنظام ميزة الإصرار (رسلها هنا)...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
