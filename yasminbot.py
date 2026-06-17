@@ -51,8 +51,7 @@ current_key_index = 0
 BOT_USERNAME = ""
 BOT_ID = None
 
-# 🧠 ذاكرة مؤقتة لحفظ الإجابات الطويلة لكل جروب (عشان ميزة "رسلها هنا")
-# التركيب: { chat_id: { "user_id": 123, "text": "النص الطويل هنا" } }
+# ذاكرة مؤقتة لحفظ الإجابات الطويلة لكل جروب (عشان ميزة "رسلها هنا")
 last_long_responses = {}
 
 def get_next_ai_client():
@@ -143,15 +142,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # 🛑 [ميزة الإصرار: رسلها هنا]: فحص لو زول طلب طباعة الرد الطويل جوة الجروب
+    # 🛑 [ميزة الإصرار: رسلها هنا]
     if is_group and update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID:
         here_triggers = ["رسلها هنا", "رسلو هنا", "اكتبها هنا", "أكتبها هنا", "دايرها هنا", "هنا", "ارسلها هنا", "نزلها هنا"]
         if user_text and any(trigger in user_text.lower() for trigger in here_triggers):
-            # التأكد إنو في إجابة محفوظة للجروب ده ومخصصة للزول ده بالذات (أو زول سألها)
             if chat_id in last_long_responses and last_long_responses[chat_id]["user_id"] == user_id:
                 saved_text = last_long_responses[chat_id]["text"]
                 await update.message.reply_text(f"أبشر يا غالي، طالما أصرّيت هاك ليها هنا في محلك: 👇\n\n{saved_text}")
-                # تنظيف الذاكرة بعد الطباعة عشان ما تتكرر ساي
                 del last_long_responses[chat_id]
                 return
 
@@ -181,7 +178,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if random.random() > 0.15:
                 return
 
-    # تحديد التوجيه وشخصية ياسمين
+    # تحديد التوجيه وضبط قواعد الحجم الصارمة ⚖️
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -195,11 +192,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
-            'شخصيتك وأسلوبك الجديد والموزون:\n'
-            '1. ممنوع تماماً الأسلوب الرسمي الجاف والكلام الكئيب! اتجاري مع الونسة بعفوية تامة وافتحي شات ودردشي مع الناس عادي بلهجة سودانية راقية وخفيفة (يا زول، قاطعة، خطير، سمح شديد، الحنك شنو).\n'
-            '2. استخدمي الإيموجيات الحية والضحك الخفيف (😂، 😉، 🔥، 👀) عشان تدي الونسة جو حماسي وتفاعلي.\n'
-            '3. ممنوع نهائياً استخدام كلمات الغزل أو التعسيل المبتذل مع الأولاد (مثل: يا حلوة، يا عسل، إلخ)، خليكِ ونّاسة بس ثقيلة ومحترمة.\n'
-            '4. مرونة حجم الرد: لو زول سألك سؤال جاد، أو علمي، أو موضوع محتاج فهم، فكي الضحك شوية وجاوبي بالتفصيل الكامل والشرح الوافي بدون اختصار ممل. أما لو الشات هظار وونسة عامة، خلي ردودك طقطقة سريعة وخفيفة ومن سطرين لثلاثة.'
+            'شخصيتك وقواعد حجم الرد الصارمة جداً:\n'
+            '1. الونسة العامة والتعارف والأسئلة الخفيفة (مثل: الحاصل شنو، بتعملي شنو، بتعرفي تسوي شنو، نادوك ساي، إزيك، إلخ): '
+            'قاعدة ذهبية: ممنوع تماماً ومحرم عليكِ تجاوز سطرين إلى 3 أسطر كحد أقصى! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو) وبدون رص كلام طويل أو تعريفات مملة.\n'
+            '2. الأسئلة العلمية والتقنية والجادّة فقط (مثل: اشرحي لي كود، كيف أطبخ، قصة طويلة): هنا فقط يُسمح لكِ بفك التقل والإجابة بالتفصيل الوافي والشرح الكامل.\n'
+            '3. ممنوع تماماً استخدام كلمات الغزل أو التعسيل المبتذل مع الأولاد (مثل: يا حلوة، يا عسل، إلخ)، خليكِ ونّاسة بس ثقيلة ومحترمة.\n'
+            '4. استخدمي الإيموجيات والضحك الخفيف (😂، 😉، 🔥، 👀) بذكاء وفي مكانها المناسب في الونسة.'
         )
 
     contents_list = []
@@ -243,17 +241,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines_count = len(reply_result.split('\n'))
                 
                 if is_group and lines_count > 5:
-                    # 💾 حفظ الرد الطويل في الذاكرة المؤقتة للجروب قبل الإرسال (عشان لو طلب "رسلها هنا")
                     last_long_responses[chat_id] = {
                         "user_id": user_id,
                         "text": reply_result
                     }
-                    
                     try:
                         await context.bot.send_message(chat_id=user_id, text=reply_result)
                         await update.message.reply_text(
                             f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
-                            f"*(لو عايشها تظهر هنا برضها اعمل ريبلاي علي وقول لي: رسلها هنا)*", 
+                            f"*(لو عايزها تظهر هنا برضها اعمل ريبلاي علي وقول لي: رسلها هنا)*", 
                             parse_mode="Markdown"
                         )
                     except Exception as telegram_err:
@@ -270,7 +266,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الذكية بنظام ميزة الإصرار (رسلها هنا)...")
+    print("🚀 تشغيل ياسمين الموزونة بنظام فلترة حجم الردود الخفيفة...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
