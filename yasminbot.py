@@ -39,7 +39,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 0  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
+ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
