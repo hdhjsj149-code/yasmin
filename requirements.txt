@@ -1,4 +1,4 @@
 google-genai
 python-telegram-bot==21.1.1
 requests
-edge-tts==6.1.9
+gTTS
