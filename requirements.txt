@@ -1,2 +1,3 @@
 python-telegram-bot
 google-genai
+gTTS==2.5.1
