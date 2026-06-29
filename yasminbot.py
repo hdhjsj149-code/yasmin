@@ -47,7 +47,11 @@ API_KEYS = [
     os.environ.get('GEMINI_API_KEY_3'),
     os.environ.get('GEMINI_API_KEY')
 ]
+# تنظيف المفاتيح وتجهيزها
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
+
+# تأكيد عدد المفاتيح في اللوق
+print(f"✅ تم تحميل عدد {len(API_KEYS)} مفاتيح Gemini جاهزة للشغل...")
 
 current_key_index = 0
 BOT_USERNAME = ""
@@ -213,10 +217,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     voice_content = None
 
-    # 🎙️ [المعالجة الذكية للريكورد الصوتي: Speech-to-Text]
+    # === [الخطوة 1: ترجمة الريكورد إلى نص - بنظامRetry الذكي] ===
     if is_voice:
+        # لو أرسلت ريكورد، حنحاول نترجمه، ولو المفاتيح تقيلة حننتظر بين المحاولات
+        success_voice = False
         loops_count = len(API_KEYS) if API_KEYS else 1
-        for _ in range(loops_count):
+        for i in range(loops_count):
             try:
                 voice_io = io.BytesIO()
                 if update.message.voice:
@@ -234,11 +240,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 if voice_reply.text:
                     voice_content = voice_reply.text.strip()
-                    break
+                    success_voice = True
+                    break # نجحت الترجمة
             except Exception as ve:
-                print(f"خطأ ترجمة ريكورد: {ve}")
-                rotate_key()
-                await asyncio.sleep(1)
+                error_msg = str(ve).lower()
+                # حماية نهائية من كوتة 429
+                if "429" in error_msg or "resource_exhausted" in error_msg:
+                    print(f"💥 خطأ كوتة 429 في ترجمة الصوت. محاولة رقم {i+1}...")
+                    rotate_key()
+                    await asyncio.sleep(8) # انتظام صارم للمحاولة الجاية
+                else:
+                    print(f"💥 خطأ مجهول في ترجمة الصوت: {ve}")
+                    break # ما يحاول تاني في خطأ مجهول
 
     final_prompt = f"المستخدم: {user_text}" if user_text else (f"المستخدم أرسل ريكورد والنص المترجم هو: {voice_content}" if voice_content else "[ميديا/صوت]")
 
@@ -284,8 +297,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     contents_list.append(final_prompt)
 
-    # حلقة التدوير والـ Retry الذكي لمعالجة الـ 429 بشكل مرن
+    # === [الخطوة 2: توليد الرد من Gemini - بنظام Retry المصفى 2.0] ===
     loops_count = len(API_KEYS) if API_KEYS else 1
+    success_reply = False
+    
+    # حماية من كوتة الـ Voice: لو الصوت فشل، ما تحاول Gemini تاني طوالي
+    if is_voice and not success_voice:
+        await update.message.reply_text("يا حبيبنا السيرفر مضغوط جداً وما قدر يقرأ الريكورد حقك من شركة جوجل هسة.. جرب اطلبو تاني بروقان طوالي حيشتغل! 🛠️⏳")
+        return
+
     for i in range(loops_count):
         try:
             ai_client = get_next_ai_client()
@@ -297,11 +317,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if response.text:
                 reply_result = response.text.strip()
+                success_reply = True
                 
                 # 🎨 [توليد الصورة بمحرك فلاك وقفل الإجراء لمنع التكرار]
                 if is_image_request:
                     await generate_and_send_image(update, reply_result)
-                    return
+                    return # نجح إنشاء الصورة
 
                 # 🎙️ [الرد بالريكورد الصوتى]
                 if is_voice or is_voice_requested:
@@ -310,12 +331,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     tts.write_to_fp(voice_io)
                     voice_io.seek(0)
                     await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
-                    return
+                    return # نجح الريكورد
 
+                # فحص الأسطر للمقالات الطويلة في المجموعات
                 lines_count = len(reply_result.split('\n'))
                 if is_group and lines_count > 5:
                     last_long_responses[chat_id] = {"user_id": user_id, "text": reply_result}
                     try:
+                        # إرسال الاسم بشكل صافي لتفادي أخطاء المارك داون
                         await context.bot.send_message(chat_id=user_id, text=reply_result)
                         await update.message.reply_text(
                             f"يا {user_name}، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
@@ -327,15 +350,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(fail_msg, parse_mode="Markdown")
                 else:
                     await update.message.reply_text(reply_result)
-                return
+                return # نجح الرد النصي
                 
         except Exception as e:
-            print(f"💥 خطأ تدوير تم التعامل معه: {e}")
-            rotate_key()
-            await asyncio.sleep(2)
+            error_msg = str(ve).lower()
+            if "429" in error_msg or "resource_exhausted" in error_msg:
+                print(f"💥 خطأ كوتة 429 في الرد. محاولة رقم {i+1}...")
+                rotate_key()
+                # أهم جزء في تونس أسي: النوم عشان الـ Rate Limit المجنون
+                await asyncio.sleep(8) 
+            else:
+                print(f"💥 خطأ مجهول في الرد: {e}")
+                break # ما يحاول تاني في خطأ مجهول
+
+    # 🛑 حماية نهائية: لو كل المفاتيح مضروبة كوتة وما نجح الرد، ما يفضل معلق
+    if not success_reply:
+        await update.message.reply_text("يا حبيبنا السيرفر مضغوط هسة ومفاتيح الكوتة قفلت 429 من شركة جوجل (التير الفري لسه قفل).. جرب تسألني بعد دقيقة طوالي حأرد ليك طيارة وبالموضوع! 🛠️⏳")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل النسخة المعتمدة بـ Pollinations وبدون أي تكرار نهائياً...")
+    print("🚀 تشغيل نسخة الحل النهائي: نظام Retry الذكي والصارم في تونس...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
