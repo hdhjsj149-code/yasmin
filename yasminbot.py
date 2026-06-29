@@ -3,7 +3,7 @@ import threading
 import time
 import requests
 import random
-import urllib.parse  # لتشفير النصوص في روابط الصور
+import urllib.parse
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -32,7 +32,7 @@ import io
 import datetime
 import asyncio
 import zipfile
-from gtts import gTTS  # 🎙️ مكتبة تحويل النص لصوت مجاناً
+from gtts import gTTS
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -117,7 +117,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_voice = bool(update.message.voice or update.message.audio)
 
-    # تسجيل اللوق
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
@@ -178,16 +177,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
         
-        # الريكوردات دايماً بنرد عليها عشان ما نتجاهل صوت المستخدم
         if not (is_explicit or is_direct_reply or is_voice):
             if random.random() > 0.15:
                 return
 
-    # 🎨 [الفحص الذكي لطلب الصور والتصميم]:
+    # 🎨 الفحص الذكي لطلب الصور والتصميم
     image_keywords = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'طابع', 'صنع صورة']
     is_image_request = user_text and any(word in user_text.lower() for word in image_keywords)
 
-    # تحديد التوجيه وضبط قواعد الحجم والشخصية
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -199,11 +196,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
         )
     elif is_image_request:
-        # توجيه خاص بالصور عشان Gemini ينظف الـ Prompt ويخليه احترافي ومستقبلي
+        # 🧠🧠 توجيه ذكي جداً شبيه بـ ChatGPT لفهم طبيعة اللوقو أو المكان وتفكيك عناصر الصورة بواقعية
         sys_instruction = (
-            'المستخدم يطلب تصميم صورة أو لوقو. أنتِ ياسمين، وظيفتك الآن تحويل طلبه إلى وصف إنجليزي دقيق جداً، '
-            'احترافي، ومستقبلي وعالي الدقة (Cyberpunk, Cinematic lighting, 8k, photorealistic). '
-            'اكتبي الوصف باللغة الإنجليزية فقط وبشكل مباشر بدون مقدمات أو كتابة أي كلمات عربية، ليتم إرساله لمحرك التوليد.'
+            'المستخدم يطلب تصميم صورة أو لوجو أو مكان معين. أنتِ ياسمين، وظيفتك فهم طبيعة الطلب والهدف منه تماماً مثل ChatGPT. '
+            'قومي بتحليل الكلمات: إذا كان لوجو لشيء معين (مثلاً صالون، جيم، شركة)، تخيلي العناصر المناسبة له (أدوات، رموز دالة) واصنعي وصفاً احترافياً متناسقاً يخدم هذا المجال. '
+            'وإذا كان مكاناً أو شارعاً، اصنعي وصفاً واقعياً جميلاً يعكس ملامحه الحقيقية بدقة عالية وبدون المبالغة بفرض عناصر مستقبلية أو خيالية إلا إذا طلب المستخدم ذلك صراحة. '
+            'يجب كتابة الوصف النهائي باللغة الإنجليزية فقط، وبشكل غني بالتفاصيل الفنية (Photorealistic, professional branding, highly detailed, 8k, masterpiece, clean design) وبدون أي مقدمات أو كلمات عربية.'
         )
     else:
         sys_instruction = (
@@ -218,7 +216,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
-    # 📥 [سحب الميديا والريكوردات بذكاء]:
     if target_message.photo or target_message.video or target_message.voice or target_message.audio:
         try:
             file_id = None
@@ -230,7 +227,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                if tg_file.file_size <= 10 * 1024 * 1024: # رفعنا الحد لـ 10 ميجا عشان الريكوردات
+                if tg_file.file_size <= 10 * 1024 * 1024:
                     out = io.BytesIO()
                     await tg_file.download_to_memory(out)
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
@@ -251,29 +248,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if response.text:
                 reply_result = response.text.strip()
-                await asyncio.sleep(0.1)
                 
-                # 🎨 [تنفيذ توليد الصور تلقائياً]:
+                # 🎨 [توليد الصور بالذكاء الجديد ورسالة التجهيز النظيفة]
                 if is_image_request:
-                    await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الخرافي ده... 🎨⏳")
+                    await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
                     encoded_prompt = urllib.parse.quote(reply_result)
-                    # رابط مولد الصور المجاني والسريع
                     image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true"
-                    await update.message.reply_photo(photo=image_url, caption=f"تفضل يا مَلك، ده التصميم المستقبلي لطلبك! 🔥✨")
+                    await update.message.reply_photo(photo=image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط لطلبك! ✨")
                     return
 
-                # 🎙️ [تنفيذ الرد بالريكورد لو المستخدم أرسل ريكورد]:
+                # 🎙️ [الرد بالريكورد الصوتى]
                 if is_voice:
-                    # تحويل النص الجاي من الـ AI إلى ملف صوتي مجاناً
                     tts = gTTS(text=reply_result, lang='ar', slow=False)
                     voice_io = io.BytesIO()
                     tts.write_to_fp(voice_io)
                     voice_io.seek(0)
-                    # إرسال الصوت كـ ريكورد
                     await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
                     return
 
-                # فحص الأسطر للتحويل للخاص في الرسائل النصية العادية
+                # فحص الأسطر للمقالات الطويلة
                 lines_count = len(reply_result.split('\n'))
                 if is_group and lines_count > 5:
                     last_long_responses[chat_id] = {"user_id": user_id, "text": reply_result}
@@ -285,19 +278,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown"
                         )
                     except Exception as telegram_err:
-                        fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر وما قدرت أرسلها ليك في الخاص؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
+                        fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
                         await update.message.reply_text(fail_msg, parse_mode="Markdown")
                 else:
                     await update.message.reply_text(reply_result)
                 return
                 
         except Exception as e:
-            print(f"💥 خطأ الـ API الحديث 2.5: {e}")
+            print(f"💥 خطأ تم تجاوزه وقفل التكرار: {e}")
             rotate_key()
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين بنسخة توليد الصور والريكوردات الصوتية مجاناً...")
+    print("🚀 تشغيل ياسمين بذكاء شات جي بي تي الكامل في الصور...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
