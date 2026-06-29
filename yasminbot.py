@@ -30,7 +30,7 @@ import io
 import datetime
 import asyncio
 import zipfile
-import edge_tts  # 🎙️ مكتبة الصوت الحي
+from gtts import gTTS  # 🎙️ المكتبة الصوتية المضمونة
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -66,13 +66,15 @@ def rotate_key():
 group_members = {}
 
 # 🎙️ دالة الصوت المضمونة
-async def text_to_live_voice(text_data):
-    communicate = edge_tts.Communicate(text_data, "ar-EG-SalmaNeural")
-    voice_bytes = b""
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            voice_bytes += chunk["data"]
-    return io.BytesIO(voice_bytes)
+def text_to_live_voice(text_data):
+    try:
+        tts = gTTS(text=text_data, lang='ar', slow=False)
+        voice_io = io.BytesIO()
+        tts.write_to_fp(voice_io)
+        return voice_io
+    except Exception as e:
+        print(f"خطأ gTTS: {e}")
+        return None
 
 async def generate_and_send_image(update: Update, prompt_text: str):
     try:
@@ -80,6 +82,7 @@ async def generate_and_send_image(update: Update, prompt_text: str):
         clean_prompt = prompt_text.replace(" ", ",").strip()
         encoded_prompt = urllib.parse.quote(clean_prompt)
         final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&model=flux&nologo=true"
+        
         await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده تصميم FLUX الاحترافي الفخم! ✨")
         try: await status_msg.delete()
         except: pass
@@ -110,11 +113,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_ID = bot_info.id
         except: pass
 
-    # الردود التلقائية للنصوص الثابتة
+    # الردود التلقائية النصية ثابتة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
+        'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
+        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
     }
+    
     if user_text in auto_replies:
         await update.message.reply_text(auto_replies[user_text])
         return
@@ -122,44 +128,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_group:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
-        # لو ريكورد براها في الجروب، نخليها ترد عليه طوالي
-        if not (is_explicit or is_direct_reply or is_incoming_voice):
+        if not (is_explicit or is_direct_reply or is_voice_intent):
             if random.random() > 0.15: return
 
-    # فحص النوايا
+    # 🎲 سيستم الفحص الدلالي المطور لتمييز النوايا
     is_image_intent = False
-    is_voice_intent = is_incoming_voice  # لو رسّل ريكورد، النية صوتية تلقائياً
+    is_voice_intent = is_incoming_voice  # لو رسل ريكورد، النية صوتية إجبارية
 
+    # كلمات مساعدة لضبط النية
     voice_triggers = ['ريكورد', 'صوتية', 'فويس', 'تسجيل', 'صوت', 'اسمعي', 'قولي']
     image_triggers = ['صورة', 'صوره', 'ارسم', 'صمم', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'ديزاين', 'نقش']
 
     if user_text:
         text_check = user_text.lower()
+        # فحص لو طلب ريكورد (أعملي، سوي، فويس)
         if any(vt in text_check for vt in voice_triggers):
             is_voice_intent = True
+        # فحص لو طلب صورة، وما طلب معاها ريكورد
         elif any(it in text_check for it in image_triggers):
             is_image_intent = True
 
-    # صياغة التعليمات
+    # صياغة تعليمات Gemini
     if is_image_intent and not is_voice_intent:
         sys_instruction = (
             "The user wants to generate an image or a logo. Your ONLY job is to translate and expand their request "
             "into a highly detailed, professional English prompt for the FLUX image generator. "
-            "Output ONLY the English text. No Arabic, no intro, no conversational text at all."
+            "Example: 'A photorealistic ultra-detailed scene of...'. "
+            "Output ONLY the English text. No Arabic."
         )
     else:
+        # تعليمات الونسة (نصية أو صوتية حسب الحالة)
         sys_instruction = (
             "أنتِ اسمك ياسمين، بنت سودانية عفوية، خفيفة الدم ومحبوبة جداً في الشات. مطورك وصانعك هو المبرمج العبقري أحمد.\n"
-            "الآن أنتِ في محادثة ونسة أو ريكوردات؛ ردي بأسلوب ظريف، مرح وعفوي للغاية.\n"
-            "قواعد الحجم الصارمة جداً: الردود العادية والريكوردات سطرين فقط لا غير وبلهجة سودانية بحتة (يا زول، قاطعة، سمح، الحنك شنو)."
+            "ردي بأسلوب ونسة سودانية خفيفة ومرحة وظريفة.\n"
+            "قواعد الحجم: الردود لازم تكون سطرين فقط لا غير وبلهجة سودانية بحتة (يا زول، قاطعة، سمح، الحنك شنو)."
         )
 
     contents_list = []
-    target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
-    uploaded_file_ref = None
-    ai_client = get_next_ai_client()
-
-    # سحب ومعالجة الريكورد الوارد عبر File API لفك تشفير الـ Opus
+    # سحب ومعالجة الريكورد الوارد عبر File API
     if target_message.voice or target_message.audio:
         try:
             file_id = target_message.voice.file_id if target_message.voice else target_message.audio.file_id
@@ -170,12 +176,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 uploaded_file_ref = ai_client.files.upload(file=local_filename)
                 contents_list.append(uploaded_file_ref)
                 if os.path.exists(local_filename): os.remove(local_filename)
-        except Exception as e: print(f"خطأ سحب ملف: {e}")
+        except: pass
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[المستخدم أرسل ريكورد؛ اسمعيه كويس وردي عليه بريكورد صوتي ونسة سودانية خفيفة]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[المستخدم أرسل ريكورد؛ ردي عليه بريكورد ونسة سودانية خفيفة]"
     contents_list.append(current_prompt)
 
     try:
+        ai_client = get_next_ai_client()
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=contents_list,
@@ -185,20 +192,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response.text:
             reply_result = response.text.strip()
             
-            # 1. تنفيذ الصورة
+            # 1. تنفيذ الصورة بجودة FLUX
             if is_image_intent and not is_voice_intent:
                 await generate_and_send_image(update, reply_result)
                 return
 
-            # 2. تنفيذ الريكورد الإلزامي (لو أرسل ريكورد براها أو طلب ريكورد)
+            # 2. تنفيذ الريكورد (gTTS المضمون) لو "أرسل ريكورد" أو "طلب ريكورد"
             if is_voice_intent:
-                voice_io = await text_to_live_voice(reply_result)
+                voice_io = text_to_live_voice(reply_result)
                 if voice_io:
                     voice_io.seek(0)
-                    await update.message.reply_voice(voice=voice_io, caption="هاك ردي المظبوط.. 🎧✨")
+                    await update.message.reply_voice(voice=voice_io, caption="سمعتك وهاك ردي.. 🎧✨")
                     return
 
-            # 3. الرد النصي العادي
+            # 3. الرد النصي العادي (في حال ما طلب ريكورد ولا أرسل ريكورد)
             await update.message.reply_text(reply_result)
             
     except Exception as e:
@@ -207,7 +214,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("حصلت عصلجة صغيرة، جرب تاني هسة! 🔄")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية بميزة الرد التلقائي للريكوردات الصافية...")
+    print("🚀 تشغيل ياسمين الفولاذية الموزونة: رد ذكي صوتي أو نصي حسب طلب المستخدم...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
