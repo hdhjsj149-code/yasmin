@@ -13,7 +13,9 @@ def keep_alive_ping():
         try:
             port = os.environ.get("PORT", "8080")
             requests.get(f"http://127.0.0.1:{port}/", timeout=10)
-        except: pass
+            print("🔔 السيرفر صاحي وجاهز..")
+        except Exception as e:
+            print(f"تنبيه النكز: {e}")
         time.sleep(600)
 
 def run_dummy_server():
@@ -30,14 +32,14 @@ import io
 import datetime
 import asyncio
 import zipfile
-from gtts import gTTS  # 🎙️ المكتبة الصوتية المضمونة
+from gtts import gTTS
 from google import genai
 from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  
+ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -46,9 +48,11 @@ API_KEYS = [
     os.environ.get('GEMINI_API_KEY')
 ]
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
+
 current_key_index = 0
 BOT_USERNAME = ""
 BOT_ID = None
+
 last_long_responses = {}
 
 def get_next_ai_client():
@@ -56,39 +60,52 @@ def get_next_ai_client():
     if not API_KEYS:
         fallback_key = os.environ.get('GEMINI_API_KEY')
         return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
-    return genai.Client(api_key=API_KEYS[current_key_index])
+    key = API_KEYS[current_key_index]
+    return genai.Client(api_key=key)
 
 def rotate_key():
     global current_key_index
     if API_KEYS and len(API_KEYS) > 1:
         current_key_index = (current_key_index + 1) % len(API_KEYS)
+        print(f"⚠️ تم تحويل التدوير للمفتاح رقم: {current_key_index + 1}")
 
 group_members = {}
 
-# 🎙️ دالة الصوت المضمونة
-def text_to_live_voice(text_data):
+def write_to_user_log(user_id, user_name, user_username, text, log_type="private"):
     try:
-        tts = gTTS(text=text_data, lang='ar', slow=False)
-        voice_io = io.BytesIO()
-        tts.write_to_fp(voice_io)
-        return voice_io
-    except Exception as e:
-        print(f"خطأ gTTS: {e}")
-        return None
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        safe_name = "".join([c for c in user_name if c.isalpha() or c.isdigit() or c==' ']).strip()
+        if not safe_name: safe_name = "User"
+        
+        if log_type == "group":
+            filename = f"group_log_{user_id}_{safe_name}.txt"
+        else:
+            filename = f"private_log_{user_id}_{safe_name}.txt"
+            
+        log_line = f"[{current_time}] | {user_username} | {text}\n"
+        with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
+    except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
+# 🎨 دالة توليد الصور المنفصلة والمحمية بمحرك Prodia عالي الجودة
 async def generate_and_send_image(update: Update, prompt_text: str):
     try:
-        status_msg = await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون بموديل FLUX... 🎨⏳")
-        clean_prompt = prompt_text.replace(" ", ",").strip()
-        encoded_prompt = urllib.parse.quote(clean_prompt)
-        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&model=flux&nologo=true"
+        status_msg = await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
+        encoded_prompt = urllib.parse.quote(prompt_text)
         
-        await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده تصميم FLUX الاحترافي الفخم! ✨")
-        try: await status_msg.delete()
-        except: pass
+        # استخدام محرك Prodia بموديل AbsoluteReality الاحترافي والواقعي جداً
+        prodia_url = f"https://api.prodia.com/v1/sd/generate?prompt={encoded_prompt}&model=absoluteReality_v181.safetensors&steps=25&cfg=7"
+        
+        # حنك سريع ومجاني للرفع المباشر عبر بريدج مستقل وصافي لتفادي الحظر والتكرار
+        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true&enhance=true"
+        
+        await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط والاحترافي لطلبك! ✨")
+        try:
+            await status_msg.delete()
+        except:
+            pass
     except Exception as img_err:
-        print(f"خطأ الصورة: {img_err}")
-        await update.message.reply_text("معليش يا غالي، السيرفر مهنج، جرب تاني! 🛠️")
+        print(f"خطأ في إرسال الصورة: {img_err}")
+        await update.message.reply_text("معليش يا غالي، السيرفر حق الصور مضغوط هسة، جرب اطلبها تاني بروقان! 🛠️")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_USERNAME, BOT_ID, last_long_responses
@@ -99,26 +116,77 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id if user else chat_id
     is_group = update.message.chat.type in ['group', 'supergroup']
     
-    user_name = user.first_name if user else "مستخدم"
-    user_text = ""
-    if update.message.text: user_text = update.message.text.strip()
-    elif update.message.caption: user_text = update.message.caption.strip()
-
-    is_incoming_voice = bool(update.message.voice or update.message.audio)
+    log_type = "group" if is_group else "private"
+    user_name = user.first_name if user else "مستخدم غير معروف"
+    user_username = f"@{user.username}" if user and user.username else f"ID: {user_id}"
 
     if not BOT_USERNAME or not BOT_ID:
         try:
             bot_info = await context.bot.get_me()
             BOT_USERNAME = f"@{bot_info.username}"
             BOT_ID = bot_info.id
-        except: pass
+        except Exception as e: print(f"خطأ سحب بيانات البوت: {e}")
 
-    # الردود التلقائية النصية ثابتة
+    if is_group:
+        if chat_id not in group_members: group_members[chat_id] = set()
+        if user and user.username: group_members[chat_id].add(f"@{user.username}")
+        elif user: group_members[chat_id].add(f"[{user.first_name}](tg://user?id={user.id})")
+
+    user_text = ""
+    if update.message.text: user_text = update.message.text.strip()
+    elif update.message.caption: user_text = update.message.caption.strip()
+
+    is_voice = bool(update.message.voice or update.message.audio)
+
+    if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
+    elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
+    elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
+    elif is_voice: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي/ريكورد]", log_type)
+
+    # === سحب اللوق ===
+    if user_text == "سحب اللوق" and user_id == ADMIN_ID:
+        log_files = [f for f in os.listdir('.') if (f.startswith("group_log_") or f.startswith("private_log_")) and f.endswith(".txt")]
+        if log_files:
+            await update.message.reply_text("تفضل يا مَلك، جاري تجميع اللوق المفرز... 📦⏳")
+            zip_filename = "all_users_logs.zip"
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in log_files: zipf.write(file)
+            with open(zip_filename, "rb") as log_zip:
+                await context.bot.send_document(chat_id=chat_id, document=log_zip, filename=zip_filename)
+            try: os.remove(zip_filename)
+            except: pass
+        return
+
+    # === TAG ALL ===
+    if user_text.lower() in ['تاق', '@all', 'تاغ']:
+        if not is_group: return
+        members = group_members.get(chat_id, set())
+        if not members: return
+        tag_text = "📢 **نداء عاجل للجميع:**\n\n" + " ".join(list(members))
+        await update.message.reply_text(tag_text, parse_mode="Markdown")
+        return
+
+    # 🛑 [ميزة الإصرار: رسلها هنا]
+    if is_group and update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID:
+        here_triggers = ["رسلها هنا", "رسلو هنا", "اكتبها هنا", "أكتبها هنا", "دايرها هنا", "هنا", "ارسلها هنا", "نزلها هنا"]
+        if user_text and any(trigger in user_text.lower() for trigger in here_triggers):
+            if chat_id in last_long_responses and last_long_responses[chat_id]["user_id"] == user_id:
+                saved_text = last_long_responses[chat_id]["text"]
+                await update.message.reply_text(f"أبشر يا غالي، طالما أصرّيت هاك ليها هنا في محلك: 👇\n\n{saved_text}")
+                del last_long_responses[chat_id]
+                return
+
+    # الردود التلقائية الثابتة السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
+        'منور': 'النور نورك والله يا حبيبنا! 🌟',
+        'وين انت': 'معاك هنا في الحاضر طوالي 😎',
+        'صباح الخير': 'صباح الورد والبركة يا غالي 🌤️🌺',
+        'مساء الخير': 'مساء النور والسرور والرضا 🌸',
+        'مشتاقين': 'بالأكثر والله يا حبيبنا 👑✨',
     }
     
     if user_text in auto_replies:
@@ -128,93 +196,117 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_group:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
-        if not (is_explicit or is_direct_reply or is_voice_intent):
-            if random.random() > 0.15: return
+        
+        if not (is_explicit or is_direct_reply or is_voice):
+            if random.random() > 0.15:
+                return
 
-    # 🎲 سيستم الفحص الدلالي المطور لتمييز النوايا
-    is_image_intent = False
-    is_voice_intent = is_incoming_voice  # لو رسل ريكورد، النية صوتية إجبارية
+    # 🎨 الفحص الذكي لطلب الصور والتصميم
+    image_keywords = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'طابع', 'صنع صورة']
+    is_image_request = user_text and any(word in user_text.lower() for word in image_keywords)
 
-    # كلمات مساعدة لضبط النية
-    voice_triggers = ['ريكورد', 'صوتية', 'فويس', 'تسجيل', 'صوت', 'اسمعي', 'قولي']
-    image_triggers = ['صورة', 'صوره', 'ارسم', 'صمم', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'ديزاين', 'نقش']
+    is_religious = False
+    religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
+    if user_text and any(word in user_text for word in religious_keywords):
+        is_religious = True
 
-    if user_text:
-        text_check = user_text.lower()
-        # فحص لو طلب ريكورد (أعملي، سوي، فويس)
-        if any(vt in text_check for vt in voice_triggers):
-            is_voice_intent = True
-        # فحص لو طلب صورة، وما طلب معاها ريكورد
-        elif any(it in text_check for it in image_triggers):
-            is_image_intent = True
-
-    # صياغة تعليمات Gemini
-    if is_image_intent and not is_voice_intent:
+    if is_religious:
         sys_instruction = (
-            "The user wants to generate an image or a logo. Your ONLY job is to translate and expand their request "
-            "into a highly detailed, professional English prompt for the FLUX image generator. "
-            "Example: 'A photorealistic ultra-detailed scene of...'. "
-            "Output ONLY the English text. No Arabic."
+            'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
+            'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
+        )
+    elif is_image_request:
+        sys_instruction = (
+            'المستخدم يطلب تصميم صورة أو لوجو أو مكان. أنتِ ياسمين، حللي طلبه بدقة كأنك ChatGPT وتخيلي أفضل الأشكال والألوان المناسبة له. '
+            'اكتبي وصفاً غنياً واحترافياً ومباشراً باللغة الإنجليزية يصف الفكرة بوضوح شديد لتوليد لوجو نظيف أو صورة واقعية ممتازة '
+            '(Clean vector logo, professional branding, photorealistic, highly detailed, sharp focus, masterpiece, 8k). '
+            'اكتبي الوصف بالإنجليزية فقط بدون أي مقدمات أو كلمات عربية.'
         )
     else:
-        # تعليمات الونسة (نصية أو صوتية حسب الحالة)
         sys_instruction = (
-            "أنتِ اسمك ياسمين، بنت سودانية عفوية، خفيفة الدم ومحبوبة جداً في الشات. مطورك وصانعك هو المبرمج العبقري أحمد.\n"
-            "ردي بأسلوب ونسة سودانية خفيفة ومرحة وظريفة.\n"
-            "قواعد الحجم: الردود لازم تكون سطرين فقط لا غير وبلهجة سودانية بحتة (يا زول، قاطعة، سمح، الحنك شنو)."
+            'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
+            'شخصيتك وقواعد حجم الرد الصارمة جداً:\n'
+            '1. الونسة العامة والتعارف والأسئلة الخفيفة والريكوردات العادية: '
+            'ممنوع تماماً تجاوز سطرين إلى 3 أسطر! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو).\n'
+            '2. الأسئلة العلمية والتقنية والجادّة: هنا يُسمح لكِ بالشرح الوافي.\n'
+            '3. حافظي على الثقل والأدب وبدون عبارات غزل مايعة مع الأولاد.'
         )
 
     contents_list = []
-    # سحب ومعالجة الريكورد الوارد عبر File API
-    if target_message.voice or target_message.audio:
+    target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
+
+    if target_message.photo or target_message.video or target_message.voice or target_message.audio:
         try:
-            file_id = target_message.voice.file_id if target_message.voice else target_message.audio.file_id
+            file_id = None
+            mime_type = None
+            if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
+            elif target_message.video: file_id = target_message.video.file_id; mime_type = "video/mp4"
+            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
+            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
+
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                local_filename = f"voice_{file_id}.ogg"
-                await tg_file.download_to_drive(local_filename)
-                uploaded_file_ref = ai_client.files.upload(file=local_filename)
-                contents_list.append(uploaded_file_ref)
-                if os.path.exists(local_filename): os.remove(local_filename)
-        except: pass
+                if tg_file.file_size <= 10 * 1024 * 1024:
+                    out = io.BytesIO()
+                    await tg_file.download_to_memory(out)
+                    contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
+        except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[المستخدم أرسل ريكورد؛ ردي عليه بريكورد ونسة سودانية خفيفة]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا/صوت]"
     contents_list.append(current_prompt)
 
-    try:
-        ai_client = get_next_ai_client()
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents_list,
-            config=types.GenerateContentConfig(system_instruction=sys_instruction)
-        )
-        
-        if response.text:
-            reply_result = response.text.strip()
+    loops_count = len(API_KEYS) if API_KEYS else 1
+    for _ in range(loops_count):
+        try:
+            ai_client = get_next_ai_client()
+            response = ai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=contents_list,
+                config=types.GenerateContentConfig(system_instruction=sys_instruction)
+            )
             
-            # 1. تنفيذ الصورة بجودة FLUX
-            if is_image_intent and not is_voice_intent:
-                await generate_and_send_image(update, reply_result)
-                return
+            if response.text:
+                reply_result = response.text.strip()
+                
+                # 🎨 [استدعاء الدالة المعزولة للصور وقفل الإجراء فوراً لمنع التكرار]
+                if is_image_request:
+                    await generate_and_send_image(update, reply_result)
+                    return  # قفل نهائي وصارم يمنع اللف على باقي المفاتيح
 
-            # 2. تنفيذ الريكورد (gTTS المضمون) لو "أرسل ريكورد" أو "طلب ريكورد"
-            if is_voice_intent:
-                voice_io = text_to_live_voice(reply_result)
-                if voice_io:
+                # 🎙️ [الرد بالريكورد الصوتى]
+                if is_voice:
+                    tts = gTTS(text=reply_result, lang='ar', slow=False)
+                    voice_io = io.BytesIO()
+                    tts.write_to_fp(voice_io)
                     voice_io.seek(0)
-                    await update.message.reply_voice(voice=voice_io, caption="سمعتك وهاك ردي.. 🎧✨")
+                    await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
                     return
 
-            # 3. الرد النصي العادي (في حال ما طلب ريكورد ولا أرسل ريكورد)
-            await update.message.reply_text(reply_result)
-            
-    except Exception as e:
-        print(f"خطأ عام: {e}")
-        rotate_key()
-        await update.message.reply_text("حصلت عصلجة صغيرة، جرب تاني هسة! 🔄")
+                # فحص الأسطر للمقالات الطويلة
+                lines_count = len(reply_result.split('\n'))
+                if is_group and lines_count > 5:
+                    last_long_responses[chat_id] = {"user_id": user_id, "text": reply_result}
+                    try:
+                        await context.bot.send_message(chat_id=user_id, text=reply_result)
+                        await update.message.reply_text(
+                            f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
+                            f"*(لو عايزها تظهر هنا برضها اعمل ريبلاي علي وقول لي: رسلها هنا)*", 
+                            parse_mode="Markdown"
+                        )
+                    except Exception as telegram_err:
+                        fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
+                        await update.message.reply_text(fail_msg, parse_mode="Markdown")
+                else:
+                    await update.message.reply_text(reply_result)
+                return
+                
+        except Exception as e:
+            print(f"💥 خطأ تدوير تم التعامل معه: {e}")
+            rotate_key()
+            await asyncio.sleep(2)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الفولاذية الموزونة: رد ذكي صوتي أو نصي حسب طلب المستخدم...")
+    print("🚀 تشغيل النسخة الفولاذية المصفية: صور نظيفة وبدون تكرار نهائياً...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
