@@ -284,8 +284,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     contents_list.append(final_prompt)
 
+    # حلقة التدوير والـ Retry الذكي لمعالجة الـ 429 بشكل مرن
     loops_count = len(API_KEYS) if API_KEYS else 1
-    for _ in range(loops_count):
+    for i in range(loops_count):
         try:
             ai_client = get_next_ai_client()
             response = ai_client.models.generate_content(
