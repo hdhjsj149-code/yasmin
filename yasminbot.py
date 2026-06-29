@@ -86,17 +86,15 @@ def write_to_user_log(user_id, user_name, user_username, text, log_type="private
         with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
     except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
-# 🎨 دالة توليد الصور المنفصلة والمحمية بمحرك Prodia عالي الجودة
+# 🎨 دالة توليد الصور المنفصلة والمحمية بمحرك Pollinations بشكل صافي ومحمي من التكرار عبر الـ return
 async def generate_and_send_image(update: Update, prompt_text: str):
     try:
         status_msg = await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
         encoded_prompt = urllib.parse.quote(prompt_text)
         
-        # استخدام محرك Prodia بموديل AbsoluteReality الاحترافي والواقعي جداً
-        prodia_url = f"https://api.prodia.com/v1/sd/generate?prompt={encoded_prompt}&model=absoluteReality_v181.safetensors&steps=25&cfg=7"
-        
         # حنك سريع ومجاني للرفع المباشر عبر بريدج مستقل وصافي لتفادي الحظر والتكرار
-        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true&enhance=true"
+        # تم استخدام موديل AbsoluteReality بشكل مباشر في الرابط لضمان الجودة
+        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&model=absolute_reality&nologo=true&enhance=true"
         
         await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط والاحترافي لطلبك! ✨")
         try:
@@ -138,6 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_voice = bool(update.message.voice or update.message.audio)
 
+    # حنك لو اللوق: تسجيل الميديا والريكوردات
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
@@ -193,10 +192,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
+    # حنك الجروبات: التأكد من أن الكلام موجه للبوت
     if is_group:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
         
+        # لو ما ناديتها وما رديت عليها، وما أرسلت ريكورد، طنّش بنسبة كبيرة
         if not (is_explicit or is_direct_reply or is_voice):
             if random.random() > 0.15:
                 return
@@ -205,11 +206,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_keywords = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'طابع', 'صنع صورة']
     is_image_request = user_text and any(word in user_text.lower() for word in image_keywords)
 
+    # 🎙️ الفحص الذكي لطلب تسجيل ريكورد صوتي
+    voice_request_keywords = ['سجلي ريكورد', 'ارسلي ريكورد', 'ارسلي صوت', 'داير ريكورد', 'قوليها بصوتك', 'داير اسمع صوتك']
+    is_voice_requested = user_text and any(word in user_text.lower() for word in voice_request_keywords)
+
+    # 🕋 الفحص الديني
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
         is_religious = True
 
+    # === تجهيز الـ Prompt الأساسي والـ Speech System ===
+    voice_content = None # لتخزين نص الريكورد المترجم
+
+    # 🎙️ [المعالجة الذكية للريكورد الصوتي: Speech-to-Text]
+    if is_voice:
+        # لو أرسلت ريكورد، حنعمل ترجمة صوتية أولاً ونستخدم النص كـ Context
+        loops_count = len(API_KEYS) if API_KEYS else 1
+        for _ in range(loops_count):
+            try:
+                # تجهيز الملف الصوتي
+                voice_io = io.BytesIO()
+                if update.message.voice:
+                    await (await context.bot.get_file(update.message.voice.file_id)).download_to_memory(voice_io)
+                elif update.message.audio:
+                    await (await context.bot.get_file(update.message.audio.file_id)).download_to_memory(voice_io)
+                voice_io.seek(0)
+
+                # ترجمة الريكورد عبر Gemini 2.5-flash (المتخصص في الميديا)
+                temp_sys = "أنتِ محولة صوتية محترفة، اسمعي الريكورد السوداني ده واكتبي النص المسموع بالضبط كPrompt للمستخدم بدون أي زيادات."
+                ai_client = get_next_ai_client()
+                voice_reply = ai_client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[types.Part.from_bytes(data=voice_io.getvalue(), mime_type="audio/ogg")],
+                    config=types.GenerateContentConfig(system_instruction=temp_sys)
+                )
+                if voice_reply.text:
+                    voice_content = voice_reply.text.strip()
+                    break # نجحت الترجمة
+            except Exception as ve:
+                print(f"خطأ ترجمة ريكورد: {ve}")
+                rotate_key()
+                await asyncio.sleep(1)
+
+    # الـ Prompt الحقيقي (إما النص المكتوب أو المترجم من الريكورد)
+    final_prompt = f"المستخدم: {user_text}" if user_text else (f"المستخدم أرسل ريكورد والنص المترجم هو: {voice_content}" if voice_content else "[ميديا/صوت]")
+
+    # === تحديد الـ System Instruction بناءً على نوع الطلب ===
     if is_religious:
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
@@ -223,26 +266,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'اكتبي الوصف بالإنجليزية فقط بدون أي مقدمات أو كلمات عربية.'
         )
     else:
+        # الـ sys الحقيقي للردود العادية
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
             'شخصيتك وقواعد حجم الرد الصارمة جداً:\n'
             '1. الونسة العامة والتعارف والأسئلة الخفيفة والريكوردات العادية: '
-            'ممنوع تماماً تجاوز سطرين إلى 3 أسطر! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو).\n'
+            'ممنوع تماماً تجاوز سطرين إلى 3 أسطر! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو). '
+            'ردي على الموضوع الأساسي السألك منو المستخدم.\n'
             '2. الأسئلة العلمية والتقنية والجادّة: هنا يُسمح لكِ بالشرح الوافي.\n'
             '3. حافظي على الثقل والأدب وبدون عبارات غزل مايعة مع الأولاد.'
         )
 
+    # تجهيز الميديا والمحتويات
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
-    if target_message.photo or target_message.video or target_message.voice or target_message.audio:
+    if not is_voice and (target_message.photo or target_message.video):
         try:
             file_id = None
             mime_type = None
             if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
             elif target_message.video: file_id = target_message.video.file_id; mime_type = "video/mp4"
-            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
-            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
@@ -252,9 +296,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا/صوت]"
-    contents_list.append(current_prompt)
+    contents_list.append(final_prompt)
 
+    # === [المرحلة النهائية: توليد الرد من Gemini] ===
     loops_count = len(API_KEYS) if API_KEYS else 1
     for _ in range(loops_count):
         try:
@@ -268,37 +312,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response.text:
                 reply_result = response.text.strip()
                 
-                # 🎨 [استدعاء الدالة المعزولة للصور وقفل الإجراء فوراً لمنع التكرار]
+                # 🎨 [استدعاء الدالة المعزولة للصور وقفل الإجراء فوراً]
                 if is_image_request:
                     await generate_and_send_image(update, reply_result)
-                    return  # قفل نهائي وصارم يمنع اللف على باقي المفاتيح
+                    return # قفل نهائي وصارم يمنع اللف على باقي المفاتيح
 
-                # 🎙️ [الرد بالريكورد الصوتى]
-                if is_voice:
+                # 🎙️ [الرد بالريكورد الصوتى: لو أرسل ريكورد OR طلب ريكورد]
+                if is_voice or is_voice_requested:
                     tts = gTTS(text=reply_result, lang='ar', slow=False)
                     voice_io = io.BytesIO()
                     tts.write_to_fp(voice_io)
                     voice_io.seek(0)
-                    await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
-                    return
+                    await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي بصوتي.. 🎧")
+                    return # نجح الريكورد
 
-                # فحص الأسطر للمقالات الطويلة
+                # فحص الأسطر للمقالات الطويلة في المجموعات
                 lines_count = len(reply_result.split('\n'))
                 if is_group and lines_count > 5:
                     last_long_responses[chat_id] = {"user_id": user_id, "text": reply_result}
                     try:
+                        # إرسال الاسم بشكل صافي لتفادي أخطاء المارك داون
                         await context.bot.send_message(chat_id=user_id, text=reply_result)
                         await update.message.reply_text(
-                            f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
+                            f"يا {user_name}، الإجابة طويلة شديد عشان كدة رسلتها ليك كاملة في الخاص بروقان! 😉📥\n"
                             f"*(لو عايزها تظهر هنا برضها اعمل ريبلاي علي وقول لي: رسلها هنا)*", 
                             parse_mode="Markdown"
                         )
                     except Exception as telegram_err:
-                        fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
+                        fail_msg = f"يا {user_name}، الإجابة طويلة وفصلت الـ 5 أسطر؛ ادخل علي {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
                         await update.message.reply_text(fail_msg, parse_mode="Markdown")
                 else:
                     await update.message.reply_text(reply_result)
-                return
+                return # نجح الرد النصي
                 
         except Exception as e:
             print(f"💥 خطأ تدوير تم التعامل معه: {e}")
