@@ -3,6 +3,7 @@ import threading
 import time
 import requests
 import random
+import urllib.parse  # لتشفير النصوص في روابط الصور
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -31,13 +32,14 @@ import io
 import datetime
 import asyncio
 import zipfile
+from gtts import gTTS  # 🎙️ مكتبة تحويل النص لصوت مجاناً
 from google import genai
 from google.genai import types
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
+ADMIN_ID = 0  # 🚨 حط رقم حسابك بالأرقام هنا عشان سحب اللوق
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -51,7 +53,6 @@ current_key_index = 0
 BOT_USERNAME = ""
 BOT_ID = None
 
-# ذاكرة مؤقتة لحفظ الإجابات الطويلة لكل جروب (عشان ميزة "رسلها هنا")
 last_long_responses = {}
 
 def get_next_ai_client():
@@ -114,10 +115,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
+    is_voice = bool(update.message.voice or update.message.audio)
+
+    # تسجيل اللوق
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
-    elif update.message.voice or update.message.audio: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي]", log_type)
+    elif is_voice: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي/ريكورد]", log_type)
 
     # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
@@ -174,11 +178,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
         
-        if not (is_explicit or is_direct_reply):
+        # الريكوردات دايماً بنرد عليها عشان ما نتجاهل صوت المستخدم
+        if not (is_explicit or is_direct_reply or is_voice):
             if random.random() > 0.15:
                 return
 
-    # تحديد التوجيه وضبط قواعد الحجم الصارمة ⚖️
+    # 🎨 [الفحص الذكي لطلب الصور والتصميم]:
+    image_keywords = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'طابع', 'صنع صورة']
+    is_image_request = user_text and any(word in user_text.lower() for word in image_keywords)
+
+    # تحديد التوجيه وضبط قواعد الحجم والشخصية
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
     if user_text and any(word in user_text for word in religious_keywords):
@@ -189,20 +198,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
         )
+    elif is_image_request:
+        # توجيه خاص بالصور عشان Gemini ينظف الـ Prompt ويخليه احترافي ومستقبلي
+        sys_instruction = (
+            'المستخدم يطلب تصميم صورة أو لوقو. أنتِ ياسمين، وظيفتك الآن تحويل طلبه إلى وصف إنجليزي دقيق جداً، '
+            'احترافي، ومستقبلي وعالي الدقة (Cyberpunk, Cinematic lighting, 8k, photorealistic). '
+            'اكتبي الوصف باللغة الإنجليزية فقط وبشكل مباشر بدون مقدمات أو كتابة أي كلمات عربية، ليتم إرساله لمحرك التوليد.'
+        )
     else:
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
             'شخصيتك وقواعد حجم الرد الصارمة جداً:\n'
-            '1. الونسة العامة والتعارف والأسئلة الخفيفة (مثل: الحاصل شنو، بتعملي شنو، بتعرفي تسوي شنو، نادوك ساي، إزيك، إلخ): '
-            'قاعدة ذهبية: ممنوع تماماً ومحرم عليكِ تجاوز سطرين إلى 3 أسطر كحد أقصى! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو) وبدون رص كلام طويل أو تعريفات مملة.\n'
-            '2. الأسئلة العلمية والتقنية والجادّة فقط (مثل: اشرحي لي كود، كيف أطبخ، قصة طويلة): هنا فقط يُسمح لكِ بفك التقل والإجابة بالتفصيل الوافي والشرح الكامل.\n'
-            '3. ممنوع تماماً استخدام كلمات الغزل أو التعسيل المبتذل مع الأولاد (مثل: يا حلوة، يا عسل، إلخ)، خليكِ ونّاسة بس ثقيلة ومحترمة.\n'
-            '4. استخدمي الإيموجيات والضحك الخفيف (😂، 😉، 🔥، 👀) بذكاء وفي مكانها المناسب في الونسة.'
+            '1. الونسة العامة والتعارف والأسئلة الخفيفة والريكوردات العادية: '
+            'ممنوع تماماً تجاوز سطرين إلى 3 أسطر! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو).\n'
+            '2. الأسئلة العلمية والتقنية والجادّة: هنا يُسمح لكِ بالشرح الوافي.\n'
+            '3. حافظي على الثقل والأدب وبدون عبارات غزل مايعة مع الأولاد.'
         )
 
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
 
+    # 📥 [سحب الميديا والريكوردات بذكاء]:
     if target_message.photo or target_message.video or target_message.voice or target_message.audio:
         try:
             file_id = None
@@ -214,13 +230,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                if tg_file.file_size <= 5 * 1024 * 1024:
+                if tg_file.file_size <= 10 * 1024 * 1024: # رفعنا الحد لـ 10 ميجا عشان الريكوردات
                     out = io.BytesIO()
                     await tg_file.download_to_memory(out)
                     contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا/صوت]"
     contents_list.append(current_prompt)
 
     loops_count = len(API_KEYS) if API_KEYS else 1
@@ -237,14 +253,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_result = response.text.strip()
                 await asyncio.sleep(0.1)
                 
-                # فحص الأسطر للتحويل للخاص
+                # 🎨 [تنفيذ توليد الصور تلقائياً]:
+                if is_image_request:
+                    await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الخرافي ده... 🎨⏳")
+                    encoded_prompt = urllib.parse.quote(reply_result)
+                    # رابط مولد الصور المجاني والسريع
+                    image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true"
+                    await update.message.reply_photo(photo=image_url, caption=f"تفضل يا مَلك، ده التصميم المستقبلي لطلبك! 🔥✨")
+                    return
+
+                # 🎙️ [تنفيذ الرد بالريكورد لو المستخدم أرسل ريكورد]:
+                if is_voice:
+                    # تحويل النص الجاي من الـ AI إلى ملف صوتي مجاناً
+                    tts = gTTS(text=reply_result, lang='ar', slow=False)
+                    voice_io = io.BytesIO()
+                    tts.write_to_fp(voice_io)
+                    voice_io.seek(0)
+                    # إرسال الصوت كـ ريكورد
+                    await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
+                    return
+
+                # فحص الأسطر للتحويل للخاص في الرسائل النصية العادية
                 lines_count = len(reply_result.split('\n'))
-                
                 if is_group and lines_count > 5:
-                    last_long_responses[chat_id] = {
-                        "user_id": user_id,
-                        "text": reply_result
-                    }
+                    last_long_responses[chat_id] = {"user_id": user_id, "text": reply_result}
                     try:
                         await context.bot.send_message(chat_id=user_id, text=reply_result)
                         await update.message.reply_text(
@@ -253,7 +285,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown"
                         )
                     except Exception as telegram_err:
-                        print(f"فشل الإرسال في الخاص: {telegram_err}")
                         fail_msg = f"يا [{user_name}](tg://user?id={user_id})، الإجابة طويلة وفصلت الـ 5 أسطر وما قدرت أرسلها ليك في الخاص؛ ادخل علي هنا {BOT_USERNAME} واضغط (Start) عشان المرة الجاية تجيك طيارة! 🚀\n\n---\n\n{reply_result}"
                         await update.message.reply_text(fail_msg, parse_mode="Markdown")
                 else:
@@ -266,7 +297,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(5)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الموزونة بنظام فلترة حجم الردود الخفيفة...")
+    print("🚀 تشغيل ياسمين بنسخة توليد الصور والريكوردات الصوتية مجاناً...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
