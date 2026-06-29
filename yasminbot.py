@@ -32,7 +32,7 @@ import io
 import datetime
 import asyncio
 import zipfile
-from gtts import gTTS
+import edge_tts  # 🎙️ مكتبة الصوت الحي الطبيعي والمجاني من مايكروسوفت
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -85,6 +85,32 @@ def write_to_user_log(user_id, user_name, user_username, text, log_type="private
         log_line = f"[{current_time}] | {user_username} | {text}\n"
         with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
     except Exception as e: print(f"خطأ كتابة اللوق: {e}")
+
+# 🎙️ دالة تحويل النص لصوت حي حقيقي مجاناً
+async def text_to_live_voice(text_data):
+    try:
+        # استخدام صوت أنثوي طبيعي واحترافي يدعم العربية بروقان
+        communicate = edge_tts.Communicate(text_data, "ar-EG-SalmaNeural")
+        voice_bytes = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                voice_bytes += chunk["data"]
+        return io.BytesIO(voice_bytes)
+    except Exception as e:
+        print(f"خطأ توليد الصوت الحي: {e}")
+        return None
+
+async def generate_and_send_image(update: Update, prompt_text: str):
+    try:
+        status_msg = await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
+        encoded_prompt = urllib.parse.quote(prompt_text)
+        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true&enhance=true"
+        await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط والاحترافي لطلبك! ✨")
+        try: await status_msg.delete()
+        except: pass
+    except Exception as img_err:
+        print(f"خطأ في إرسال الصورة: {img_err}")
+        await update.message.reply_text("معليش يا غالي، السيرفر حق الصور مضغوط هسة، جرب اطلبها تاني بروقان! 🛠️")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_USERNAME, BOT_ID, last_long_responses
@@ -163,7 +189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
         'وين انت': 'معاك هنا في الحاضر طوالي 😎',
-        'صباح الخير': 'صباح الورد والبركة يا غالي 🌤️🌺',
+        'صباح الخير': 'صباح الورد والبركة يا غالي 🌤️👑',
         'مساء الخير': 'مساء النور والسرور والرضا 🌸',
         'مشتاقين': 'بالأكثر والله يا حبيبنا 👑✨',
     }
@@ -172,7 +198,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # 🎲 سيستم المراقبة والتدخل العشوائي في الجروبات
     if is_group:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
@@ -181,9 +206,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if random.random() > 0.15:
                 return
 
-    # 🎨 الفحص الذكي لطلب الصور والتصميم
-    image_keywords = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'طابع', 'صنع صورة']
-    is_image_request = user_text and any(word in user_text.lower() for word in image_keywords)
+    # 🧠 الفحص الذكي الشامل للهجات لتمييز نية طلب الصور والريكوردات
+    # اعتمدنا على توجيه الموديل نفسه ليفهم أي لهجة تطلب "عمل أو إنشاء" شيء مرئي
+    is_image_intent = False
+    if user_text:
+        # لستة مساعدة لزيادة دقة الفحص السريع
+        quick_image_words = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'سوي', 'اعمل', 'نقش', 'ديزاين']
+        if any(word in user_text.lower() for word in quick_image_words):
+            is_image_intent = True
 
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
@@ -195,13 +225,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
             'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
         )
-    elif is_image_request:
-        # 🧠🧠 توجيه ذكي جداً شبيه بـ ChatGPT لفهم طبيعة اللوقو أو المكان وتفكيك عناصر الصورة بواقعية
+    elif is_image_intent:
+        # السيستم المطور للفهم الشامل للهجات شات جي بي تي
         sys_instruction = (
-            'المستخدم يطلب تصميم صورة أو لوجو أو مكان معين. أنتِ ياسمين، وظيفتك فهم طبيعة الطلب والهدف منه تماماً مثل ChatGPT. '
-            'قومي بتحليل الكلمات: إذا كان لوجو لشيء معين (مثلاً صالون، جيم، شركة)، تخيلي العناصر المناسبة له (أدوات، رموز دالة) واصنعي وصفاً احترافياً متناسقاً يخدم هذا المجال. '
-            'وإذا كان مكاناً أو شارعاً، اصنعي وصفاً واقعياً جميلاً يعكس ملامحه الحقيقية بدقة عالية وبدون المبالغة بفرض عناصر مستقبلية أو خيالية إلا إذا طلب المستخدم ذلك صراحة. '
-            'يجب كتابة الوصف النهائي باللغة الإنجليزية فقط، وبشكل غني بالتفاصيل الفنية (Photorealistic, professional branding, highly detailed, 8k, masterpiece, clean design) وبدون أي مقدمات أو كلمات عربية.'
+            'المستخدم يطلب تصميم صورة أو لوجو أو خلفية بأي لهجة كانت (مثل: سوي لي، اعمل لي، نقش، ارسم، صمم، داير شكل). '
+            'أنتِ ياسمين، حللي طلبه بدقة وافهمي النية والموضوع تماماً. '
+            'اكتبي وصفاً غنياً واحترافياً ومباشراً باللغة الإنجليزية يصف الفكرة بوضوح شديد لتوليد لوجو نظيف أو صورة واقعية ممتازة '
+            '(Clean vector logo, professional branding, photorealistic, highly detailed, sharp focus, masterpiece, 8k). '
+            'اكتبي الوصف بالإنجليزية فقط بدون أي مقدمات أو كلمات عربية.'
         )
     else:
         sys_instruction = (
@@ -215,31 +246,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     contents_list = []
     target_message = update.message.reply_to_message if update.message.reply_to_message else update.message
+    uploaded_file_ref = None
+    ai_client = get_next_ai_client()
 
     if target_message.photo or target_message.video or target_message.voice or target_message.audio:
         try:
             file_id = None
             mime_type = None
+            is_target_voice = False
+            
             if target_message.photo: file_id = target_message.photo[-1].file_id; mime_type = "image/jpeg"
             elif target_message.video: file_id = target_message.video.file_id; mime_type = "video/mp4"
-            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"
-            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"
+            elif target_message.voice: file_id = target_message.voice.file_id; mime_type = "audio/ogg"; is_target_voice = True
+            elif target_message.audio: file_id = target_message.audio.file_id; mime_type = "audio/mpeg"; is_target_voice = True
 
             if file_id:
                 tg_file = await context.bot.get_file(file_id)
-                if tg_file.file_size <= 10 * 1024 * 1024:
-                    out = io.BytesIO()
-                    await tg_file.download_to_memory(out)
-                    contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
+                if tg_file.file_size <= 15 * 1024 * 1024:
+                    if is_target_voice:
+                        local_filename = f"voice_{file_id}.ogg"
+                        await tg_file.download_to_drive(local_filename)
+                        uploaded_file_ref = ai_client.files.upload(file=local_filename)
+                        contents_list.append(uploaded_file_ref)
+                        if os.path.exists(local_filename): os.remove(local_filename)
+                    else:
+                        out = io.BytesIO()
+                        await tg_file.download_to_memory(out)
+                        contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[ميديا/صوت]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[تحليل الملف الصوتي المرفق والرد عليه بلغة سودانية عامية عفوية]"
     contents_list.append(current_prompt)
 
     loops_count = len(API_KEYS) if API_KEYS else 1
     for _ in range(loops_count):
         try:
-            ai_client = get_next_ai_client()
             response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents_list,
@@ -249,21 +290,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response.text:
                 reply_result = response.text.strip()
                 
-                # 🎨 [توليد الصور بالذكاء الجديد ورسالة التجهيز النظيفة]
-                if is_image_request:
-                    await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
-                    encoded_prompt = urllib.parse.quote(reply_result)
-                    image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true"
-                    await update.message.reply_photo(photo=image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط لطلبك! ✨")
+                # للتأكد الإضافي لو الموديل كتب وصف إنجليزي لطلب الصورة
+                if is_image_intent and not any(f in reply_result.lower() for f in ['يا زول', 'ياسمين', 'أبشر']):
+                    await generate_and_send_image(update, reply_result)
+                    if uploaded_file_ref:
+                        try: ai_client.files.delete(name=uploaded_file_ref.name)
+                        except: pass
                     return
 
-                # 🎙️ [الرد بالريكورد الصوتى]
+                # 🎙️ [الرد بالريكورد الصوتى الحي الطبيعي]
                 if is_voice:
-                    tts = gTTS(text=reply_result, lang='ar', slow=False)
-                    voice_io = io.BytesIO()
-                    tts.write_to_fp(voice_io)
-                    voice_io.seek(0)
-                    await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
+                    voice_io = await text_to_live_voice(reply_result)
+                    if voice_io:
+                        voice_io.seek(0)
+                        await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
+                    else:
+                        await update.message.reply_text(reply_result)
+                    
+                    if uploaded_file_ref:
+                        try: ai_client.files.delete(name=uploaded_file_ref.name)
+                        except: pass
                     return
 
                 # فحص الأسطر للمقالات الطويلة
@@ -282,15 +328,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await update.message.reply_text(fail_msg, parse_mode="Markdown")
                 else:
                     await update.message.reply_text(reply_result)
+                
+                if uploaded_file_ref:
+                    try: ai_client.files.delete(name=uploaded_file_ref.name)
+                    except: pass
                 return
                 
         except Exception as e:
-            print(f"💥 خطأ تم تجاوزه وقفل التكرار: {e}")
+            print(f"💥 خطأ تم تجاوزه: {e}")
             rotate_key()
+            ai_client = get_next_ai_client()
             await asyncio.sleep(2)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين بذكاء شات جي بي تي الكامل في الصور...")
+    print("🚀 تشغيل نسخة ياسمين الفولاذية بالصوت الحي والفهم الشامل للهجات...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
