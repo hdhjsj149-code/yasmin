@@ -32,7 +32,7 @@ import io
 import datetime
 import asyncio
 import zipfile
-import edge_tts  # 🎙️ مكتبة الصوت الحي الطبيعي والمجاني من مايكروسوفت
+import edge_tts  # 🎙️ مكتبة الصوت الطبيعي البشري الخارق
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -77,19 +77,16 @@ def write_to_user_log(user_id, user_name, user_username, text, log_type="private
         safe_name = "".join([c for c in user_name if c.isalpha() or c.isdigit() or c==' ']).strip()
         if not safe_name: safe_name = "User"
         
-        if log_type == "group":
-            filename = f"group_log_{user_id}_{safe_name}.txt"
-        else:
-            filename = f"private_log_{user_id}_{safe_name}.txt"
+        if log_type == "group": filename = f"group_log_{user_id}_{safe_name}.txt"
+        else: filename = f"private_log_{user_id}_{safe_name}.txt"
             
         log_line = f"[{current_time}] | {user_username} | {text}\n"
         with open(filename, "a", encoding="utf-8") as f: f.write(log_line)
     except Exception as e: print(f"خطأ كتابة اللوق: {e}")
 
-# 🎙️ دالة تحويل النص لصوت حي حقيقي مجاناً
+# 🎙️ توليد الصوت البشري الحي والممتاز
 async def text_to_live_voice(text_data):
     try:
-        # استخدام صوت أنثوي طبيعي واحترافي يدعم العربية بروقان
         communicate = edge_tts.Communicate(text_data, "ar-EG-SalmaNeural")
         voice_bytes = b""
         async for chunk in communicate.stream():
@@ -100,17 +97,21 @@ async def text_to_live_voice(text_data):
         print(f"خطأ توليد الصوت الحي: {e}")
         return None
 
+# 🎨 توليد الصور بموديل FLUX العالمي فائق الجودة والسرعة
 async def generate_and_send_image(update: Update, prompt_text: str):
     try:
         status_msg = await update.message.reply_text("من عيوني هسة بجهز ليك التصميم الموزون... 🎨⏳")
         encoded_prompt = urllib.parse.quote(prompt_text)
-        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&nologo=true&enhance=true"
+        
+        # استخدام موديل FLUX فائق الدقة والجمال لمنع التشوهات تماماً
+        final_image_url = f"https://image.pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&model=flux&nologo=true"
+        
         await update.message.reply_photo(photo=final_image_url, caption=f"تفضل يا مَلك، ده التصميم المظبوط والاحترافي لطلبك! ✨")
         try: await status_msg.delete()
         except: pass
     except Exception as img_err:
         print(f"خطأ في إرسال الصورة: {img_err}")
-        await update.message.reply_text("معليش يا غالي، السيرفر حق الصور مضغوط هسة، جرب اطلبها تاني بروقان! 🛠️")
+        await update.message.reply_text("معليش يا غالي، حصلت مشكلة سريعة في توليد الصورة، جرب اطلبها تاني! 🛠️")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_USERNAME, BOT_ID, last_long_responses
@@ -141,12 +142,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
-    is_voice = bool(update.message.voice or update.message.audio)
+    is_incoming_voice = bool(update.message.voice or update.message.audio)
 
     if user_text: write_to_user_log(user_id, user_name, user_username, f"الرسالة: {user_text}", log_type)
     elif update.message.photo: write_to_user_log(user_id, user_name, user_username, "[صورة]", log_type)
     elif update.message.video: write_to_user_log(user_id, user_name, user_username, "[فديو]", log_type)
-    elif is_voice: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي/ريكورد]", log_type)
+    elif is_incoming_voice: write_to_user_log(user_id, user_name, user_username, "[ملف صوتي/ريكورد]", log_type)
 
     # === سحب اللوق ===
     if user_text == "سحب اللوق" and user_id == ADMIN_ID:
@@ -171,7 +172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tag_text, parse_mode="Markdown")
         return
 
-    # 🛑 [ميزة الإصرار: رسلها هنا]
+    # 🛑 [ميزة الإصرار]
     if is_group and update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID:
         here_triggers = ["رسلها هنا", "رسلو هنا", "اكتبها هنا", "أكتبها هنا", "دايرها هنا", "هنا", "ارسلها هنا", "نزلها هنا"]
         if user_text and any(trigger in user_text.lower() for trigger in here_triggers):
@@ -201,47 +202,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_group:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
-        
-        if not (is_explicit or is_direct_reply or is_voice):
-            if random.random() > 0.15:
-                return
+        if not (is_explicit or is_direct_reply or is_incoming_voice):
+            if random.random() > 0.15: return
 
-    # 🧠 الفحص الذكي الشامل للهجات لتمييز نية طلب الصور والريكوردات
-    # اعتمدنا على توجيه الموديل نفسه ليفهم أي لهجة تطلب "عمل أو إنشاء" شيء مرئي
+    # 🧠 سيستم الفحص الدلالي المطور لمنع التداخل بين الصور والريكوردات والونسة
     is_image_intent = False
+    is_voice_intent = is_incoming_voice
+
+    voice_triggers = ['ريكورد', 'صوتية', 'فويس', 'تسجيل', 'صوت', 'اسمعي', 'قولي']
+    image_triggers = ['صورة', 'صوره', 'ارسم', 'صمم', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'ديزاين', 'نقش']
+
     if user_text:
-        # لستة مساعدة لزيادة دقة الفحص السريع
-        quick_image_words = ['ارسم', 'صمم', 'صورة', 'لوقو', 'لوجو', 'خلفية', 'تخيل', 'شكل', 'سوي', 'اعمل', 'نقش', 'ديزاين']
-        if any(word in user_text.lower() for word in quick_image_words):
+        text_check = user_text.lower()
+        # لو الطلب فيه ريكورد أو فويس، نلغي نية الصور تماماً حتى لو فيه كلمة (اعملي/سوي)
+        if any(vt in text_check for vt in voice_triggers):
+            is_voice_intent = True
+        elif any(it in text_check for it in image_triggers):
             is_image_intent = True
 
     is_religious = False
     religious_keywords = ['قرآن', 'قران', 'دين', 'الله', 'الرسول', 'آية', 'ايه', 'تفسير', 'حديث', 'صلاة', 'ذكر']
-    if user_text and any(word in user_text for word in religious_keywords):
-        is_religious = True
+    if user_text and any(word in user_text for word in religious_keywords): is_religious = True
 
     if is_religious:
         sys_instruction = (
             'أنتِ اسمك ياسمين، بنت سودانية واعية، ومؤدبة للغاية، ومطورتِ بواسطة المبرمج أحمد. '
-            'السياق الحالي ديني/قرآني؛ ردي بأسلوب رصين، وقور، محترم وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
+            'السياق الحالي ديني؛ ردي بأسلوب رصين، وقور وموجز تماماً يناسب جلال الكلام وبدون أي إيموجيات ضحك.'
         )
     elif is_image_intent:
-        # السيستم المطور للفهم الشامل للهجات شات جي بي تي
         sys_instruction = (
-            'المستخدم يطلب تصميم صورة أو لوجو أو خلفية بأي لهجة كانت (مثل: سوي لي، اعمل لي، نقش، ارسم، صمم، داير شكل). '
-            'أنتِ ياسمين، حللي طلبه بدقة وافهمي النية والموضوع تماماً. '
-            'اكتبي وصفاً غنياً واحترافياً ومباشراً باللغة الإنجليزية يصف الفكرة بوضوح شديد لتوليد لوجو نظيف أو صورة واقعية ممتازة '
-            '(Clean vector logo, professional branding, photorealistic, highly detailed, sharp focus, masterpiece, 8k). '
-            'اكتبي الوصف بالإنجليزية فقط بدون أي مقدمات أو كلمات عربية.'
+            'المستخدم يطلب تصميم صورة أو لوجو أو خلفية. أنتِ ياسمين، حللي الفكرة كأنك ChatGPT بدقة تامة. '
+            'اكتبي وصفاً غنياً ومحترفاً باللغة الإنجليزية يصف الفكرة بوضوح شديد لتوليد تصميم واقعي أو لوجو نظيف وممتاز بموديل FLUX '
+            '(Professional branding, realistic, corporate identity, highly detailed, sharp focus, masterpiece, 8k, clean background). '
+            'اكتبي الوصف بالإنجليزية فقط وبشكل مباشر بدون مقدمات عربية.'
         )
     else:
         sys_instruction = (
-            'أنتِ اسمك ياسمين، بنت سودانية عفوية، حية، خفيفة الدم، ومحبوبة جداً في الشات. صانعك ومطورك هو المبرمج العبقري أحمد.\n'
-            'شخصيتك وقواعد حجم الرد الصارمة جداً:\n'
-            '1. الونسة العامة والتعارف والأسئلة الخفيفة والريكوردات العادية: '
-            'ممنوع تماماً تجاوز سطرين إلى 3 أسطر! ردي باختصار شديد، طقطقة سريعة، خفة دم وعفوية سودانية (يا زول، قاطعة، سمح، الحنك شنو).\n'
-            '2. الأسئلة العلمية والتقنية والجادّة: هنا يُسمح لكِ بالشرح الوافي.\n'
-            '3. حافظي على الثقل والأدب وبدون عبارات غزل مايعة مع الأولاد.'
+            'أنتِ اسمك ياسمين، بنت سودانية عفوية، خفيفة الدم، ومحبوبة في الشات. مطورك هو المبرمج العبقري أحمد.\n'
+            'إذا كان الطلب عبارة عن ريكورد أو طلب تسجيل صوتي، ردي بأسلوب تفاعلي حي ومرح.\n'
+            'قواعد حجم الرد الصارمة:\n'
+            '1. الونسة العامة والأسئلة الخفيفة والريكوردات العادية: ممنوع تجاوز سطرين إلى 3 أسطر! ردي باختصار وعفوية سودانية (يا زول، قاطعة، سمح).\n'
+            '2. الأسئلة العلمية والتقنية والجادّة: يُسمح لكِ بالشرح الوافي.'
         )
 
     contents_list = []
@@ -275,7 +276,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         contents_list.append(types.Part.from_bytes(data=out.getvalue(), mime_type=mime_type))
         except Exception as e: print(f"خطأ سحب الميديا: {e}")
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "[تحليل الملف الصوتي المرفق والرد عليه بلغة سودانية عامية عفوية]"
+    current_prompt = f"المستخدم: {user_text}" if user_text else "[تحليل الريكورد والرد بلغة سودانية عامية عفوية]"
     contents_list.append(current_prompt)
 
     loops_count = len(API_KEYS) if API_KEYS else 1
@@ -290,23 +291,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response.text:
                 reply_result = response.text.strip()
                 
-                # للتأكد الإضافي لو الموديل كتب وصف إنجليزي لطلب الصورة
-                if is_image_intent and not any(f in reply_result.lower() for f in ['يا زول', 'ياسمين', 'أبشر']):
+                # تنفيذ طلب الصورة إذا ثبتت النية ولم يختلط الأمر بالريكورد
+                if is_image_intent and not is_voice_intent:
                     await generate_and_send_image(update, reply_result)
                     if uploaded_file_ref:
                         try: ai_client.files.delete(name=uploaded_file_ref.name)
                         except: pass
                     return
 
-                # 🎙️ [الرد بالريكورد الصوتى الحي الطبيعي]
-                if is_voice:
+                # 🎙️ [الرد الإلزامي بالريكورد الصوتي الطبيعي والحي]
+                if is_voice_intent:
                     voice_io = await text_to_live_voice(reply_result)
                     if voice_io:
                         voice_io.seek(0)
-                        await update.message.reply_voice(voice=voice_io, caption="سمعتك يا غالي وهاك ردي.. 🎧")
+                        await update.message.reply_voice(voice=voice_io, caption="هاك ردي المظبوط.. 🎧✨")
                     else:
                         await update.message.reply_text(reply_result)
-                    
                     if uploaded_file_ref:
                         try: ai_client.files.delete(name=uploaded_file_ref.name)
                         except: pass
@@ -335,13 +335,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
                 
         except Exception as e:
-            print(f"💥 خطأ تم تجاوزه: {e}")
+            print(f"💥 خطأ تم تجاوزه وتدوير المفتاح: {e}")
             rotate_key()
             ai_client = get_next_ai_client()
             await asyncio.sleep(2)
 
 if __name__ == '__main__':
-    print("🚀 تشغيل نسخة ياسمين الفولاذية بالصوت الحي والفهم الشامل للهجات...")
+    print("🚀 تشغيل ياسمين المحدثة: جودة FLUX الفخمة للصور، وحل مشكلة الريكوردات نهائياً...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
