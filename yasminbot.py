@@ -46,14 +46,12 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = 7601281598  # 👈 حط الـ ID حقك هنا
 
-# تجهيز وتأكيد مفاتيح جيمناي
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3'), os.environ.get('GEMINI_API_KEY')
 ]
 GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 
-# تجهيز مفاتيح جروك واوبن راوتر
 GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')] if k]
 OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2')] if k]
 
@@ -62,36 +60,61 @@ BOT_ID = None
 user_memory = {}
 processed_messages = set()
 
-# --- دالة جلب رد من Groq عبر الـ HTTP المباشر لمنع التكرار ---
+# --- دالة جروك مع طباعة الخطأ الفعلي الحاسم ---
 def ask_groq(prompt):
-    if not GROQ_KEYS: return None
+    if not GROQ_KEYS: 
+        print("⚠️ تحذير: قائمة GROQ_KEYS فارغة تماماً في ريندر!", flush=True)
+        return None
     try:
         key = random.choice(GROQ_KEYS)
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        
+        # جربنا هنا الموديل الأكثر استقراراً في جروك
         data = {
-            "model": "llama-3.1-70b-versatile",
+            "model": "llama3-70b-8192", 
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
-        res = requests.post(url, json=data, headers=headers, timeout=15)
-        return res.json()['choices'][0]['message']['content'].strip()
-    except: return None
+        res = requests.post(url, json=data, headers=headers, timeout=12)
+        res_json = res.json()
+        if 'choices' in res_json:
+            return res_json['choices'][0]['message']['content'].strip()
+        else:
+            print(f"🚨 جروك رجع رد غريب: {res_json}", flush=True)
+            return None
+    except Exception as e: 
+        print(f"🚨 خطأ سيرفر Groq الفعلي هو: {e}", flush=True)
+        return None
 
-# --- دالة جلب رد من OpenRouter عبر الـ HTTP المباشر ---
+# --- دالة أوبن راوتر مع طباعة الخطأ الفعلي الحاسم ---
 def ask_openrouter(prompt):
-    if not OPENROUTER_KEYS: return None
+    if not OPENROUTER_KEYS:
+        print("⚠️ تحذير: قائمة OPENROUTER_KEYS فارغة تماماً في ريندر!", flush=True)
+        return None
     try:
         key = random.choice(OPENROUTER_KEYS)
         url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://render.com", # إضافة إجبارية لبعض الحسابات
+            "X-Title": "YasminBot"
+        }
         data = {
-            "model": "meta-llama/llama-3-8b-instruct:free", # الموديل المجاني المستقر
+            "model": "meta-llama/llama-3-8b-instruct:free",
             "messages": [{"role": "user", "content": prompt}]
         }
-        res = requests.post(url, json=data, headers=headers, timeout=15)
-        return res.json()['choices'][0]['message']['content'].strip()
-    except: return None
+        res = requests.post(url, json=data, headers=headers, timeout=12)
+        res_json = res.json()
+        if 'choices' in res_json:
+            return res_json['choices'][0]['message']['content'].strip()
+        else:
+            print(f"🚨 أوبن راوتر رجع رد غريب: {res_json}", flush=True)
+            return None
+    except Exception as e:
+        print(f"🚨 خطأ سيرفر OpenRouter الفعلي هو: {e}", flush=True)
+        return None
 
 def text_to_live_voice(text_data):
     try:
@@ -105,7 +128,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_USERNAME, BOT_ID, user_memory, processed_messages
     if not update.message or not update.message.message_id: return
 
-    # حماية صارمة جداً لمنع التكرار وحنك الصور القديم
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
     if msg_unique_id in processed_messages: return
     processed_messages.add(msg_unique_id)
@@ -124,7 +146,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_long_query = len(user_text) > 40
 
-    # 📥 تفكيك الريكورد (حصرياً بجيمناي لتميزه في الصوت)
     if is_incoming_voice and GEMINI_KEYS:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -141,10 +162,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if trans_response.text:
                 user_text = trans_response.text.strip()
                 is_long_query = True
-        except:
-            pass
+        except: pass
 
-    # قاموس الردود الفورية الجاهزة والسريعة لتقليل سحب الكووتة
+    # الردود التلقائية السريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -152,7 +172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
-        'ياسمين': 'عيونها ولبيها! معاك ياسمين السمحة، آمرني يا غالي؟ 😍',
+        'ياسمين': 'عيونها ولبيها! معاك ياسمين السمحة، آمرني يا غالي? 😍',
         'كيفك': 'تمام التمام والحمد لله، الأمور باسطة! ✨',
         'تمام': 'دائماً تمام يا رب! علك طيب وبخير طوالي؟ 🌸'
     }
@@ -167,7 +187,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    # الهندسة الذكية للتوجيهات (شرح جاد vs ونسة عادية)
     if is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
         sys_instruction = (
             "أنتِ اسمك ياسمين، مساعد ذكي ومبرمجة عبقرية صممك المبرمج أحمد. "
@@ -183,7 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # 🔥 المحرك الأول: تجربة جلب الرد من Gemini
+    # المحرك الأول: تجربة جلب الرد من Gemini
     if GEMINI_KEYS:
         try:
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
@@ -193,17 +212,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             print("⚠️ جيمناي كابس أو مخلص كوووتة.. جاري التحويل إلى جروك طيارة...", flush=True)
 
-    # ⚡ المحرك الثاني (الخط البديل الأول): Groq
+    # المحرك الثاني البديل: Groq
     if not reply_result:
         reply_result = ask_groq(prompt_content)
-        if reply_result: print("✅ تم جلب الرد بنجاح عبر سيرفر Groq المظبوط!", flush=True)
 
-    # 🎛️ المحرك الثالث (الخط البديل الأخير): OpenRouter
+    # المحرك الثالث البديل الأخير: OpenRouter
     if not reply_result:
         reply_result = ask_openrouter(prompt_content)
-        if reply_result: print("✅ تم جلب الرد بنجاح عبر سيرفر OpenRouter الاحتياطي!", flush=True)
 
-    # 📤 إرسال النتيجة النهائية للمستخدم لو توفرت
+    # إرسال النتيجة
     if reply_result:
         user_memory[user_id].append(f"المستخدم: {user_text}")
         user_memory[user_id].append(f"ياسمين: {reply_result}")
@@ -221,7 +238,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("معليش يا غالي، السيرفرات كلها كابسة هسة، ثواني وجرب رسل تاني! 5️⃣0️⃣٢")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الهجينة: Gemini + Groq + OpenRouter مع نظام الفرز والحماية الحاسم...")
+    print("🚀 تشغيل ياسمين الهجينة بكاشف أخطاء البدلاء...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
