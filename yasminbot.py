@@ -60,7 +60,7 @@ BOT_ID = None
 user_memory = {}
 processed_messages = set()
 
-# --- دالة جروك المحمية بالفصحى ---
+# --- دالة جروك الملطفة والموزونة ---
 def ask_groq(prompt):
     if not GROQ_KEYS: return None
     try:
@@ -71,8 +71,8 @@ def ask_groq(prompt):
         data = {
             "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.4,  # تقليل التشتت تماماً
-            "max_tokens": 500
+            "temperature": 0.6,  # رفع الحيوية قليلاً لتفاعل أفضل
+            "max_tokens": 450
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
         res_json = res.json()
@@ -82,7 +82,7 @@ def ask_groq(prompt):
     except: 
         return None
 
-# --- دالة أوبن راوتر المحمية بالفصحى ---
+# --- دالة أوبن راوتر الملطفة والموزونة ---
 def ask_openrouter(prompt):
     if not OPENROUTER_KEYS: return None
     try:
@@ -97,8 +97,8 @@ def ask_openrouter(prompt):
         data = {
             "model": "meta-llama/llama-3.1-8b-instruct:free",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.4,
-            "max_tokens": 500
+            "temperature": 0.6,
+            "max_tokens": 450
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
         res_json = res.json()
@@ -156,7 +156,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_long_query = True
         except: pass
 
-    # الردود التلقائية السريعة المحفوظة بالعامية
+    # الردود التلقائية السريعة المحفوظة بالعامية السودانية (مباشرة وسريعة)
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -179,17 +179,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    # توجيه صارم ومبسط جداً يجبر السيستم على لغة واضحة ومفيدة تابعة للسياق
+    # التوجيه الذكي الجديد: خلطة الخليجي الأبيض المليء بالحيوية والإيموجيهات
     if is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
         sys_instruction = (
-            "أنتِ اسمك ياسمين، مساعد ذكي ومبرمجة عبقرية صممك المبرمج أحمد. "
-            "أجيبي على أسئلة المستخدم باللغة العربية الفصحى المبسطة بأسلوب علمي، دقيق، مفصل ومفيد جداً، "
-            "دون تكرار الجمل أو كتابة نصوص عشوائية."
+            "أنتِ اسمك ياسمين، مساعدة ذكية ومبرمجة عبقرية صممك أحمد. "
+            "أجيبي على أسئلة المستخدم بأسلوب تقني مفيد، دقيق جداً وواضح باللغة العربية الفصحى اللطيفة والمبسطة، "
+            "مع إدراج إيموجيات تناسب الكلام (مثل: 💻, 🚀, ✨) لتلطيف الإجابة ومنع الجفاف."
         )
     else:
         sys_instruction = (
-            "أنتِ اسمك ياسمين، مساعدة ذكية ولطيفة. أجيبي على رسائل المستخدم باللغة العربية الفصحى "
-            "المبسطة والمهذبة بأسلوب مختصر ومفهوم يناسب سياق الحديث تماماً في سطرين فقط."
+            "أنتِ اسمك ياسمين، فتاة مرحة، حيوية ولطيفة جداً. "
+            "ردي على ونسة المستخدم العادية بلهجة بيضاء مبسطة (مزيج مفهوم بين الفصحى الخفيفة والخليجية الدارجة). "
+            "تكلمي بعفوية مثل: (يا هلا والله، من عيوني، أبشر يا غالي، تامرني)، واختصري الرد في سطرين فقط، "
+            "واستخدمي الكثير من الإيموجيات الحية والمرحة في كل رد (مثل: 😂, 😍, شفت كيف؟, ✨, 🙏) لتكوني مليئة بالروح والنشاط."
         )
 
     prompt_content = f"{sys_instruction}\n\nسياق المحادثة السابق:\n"
@@ -206,7 +208,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response and response.text:
                 reply_result = response.text.strip()
         except:
-            print("⚠️ جيمناي كابس.. جاري التحويل للبدلاء بالفصحى...", flush=True)
+            print("⚠️ جيمناي مخلص.. جاري التحويل للبدلاء بالحيوية الجديدة...", flush=True)
 
     # المحرك الثاني البديل: Groq
     if not reply_result:
@@ -216,7 +218,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not reply_result:
         reply_result = ask_openrouter(prompt_content)
 
-    # إرسال النتيجة الموزونة
+    # إرسال النتيجة المبهجة
     if reply_result and len(reply_result) > 2:
         user_memory[user_id].append(f"المستخدم: {user_text}")
         user_memory[user_id].append(f"ياسمين: {reply_result}")
@@ -226,15 +228,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             voice_io = text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
-                await update.message.reply_voice(voice=voice_io, caption="تفضل، ها هو الرد الصوتي.. 🎧✨")
+                await update.message.reply_voice(voice=voice_io, caption="تفضل ردي الصوتي يا غالي.. 😉🎧")
                 return
 
         await update.message.reply_text(reply_result)
     else:
-        await update.message.reply_text("معليش يا غالي، السيرفرات كابسة ثواني ورسل تاني! ✨")
+        await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الذكية باللغة الفصحى الواضحة وسياق منضبط...")
+    print("🚀 تشغيل ياسمين الحيوية الملطفة بالإيموجيهات والروح التفاعلية...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
