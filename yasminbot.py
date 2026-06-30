@@ -6,7 +6,6 @@ import random
 import urllib.parse
 import socket
 import io
-import json
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -46,7 +45,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 👈 الـ ID حق حسابك في التلجرام
+
+# 🎯 حط الـ ID حق حسابك الشخصي هنا عشان اللوج يوصلك في الخاص
+ADMIN_ID = 7601281598  # 👈 اكتب الـ ID حقك هنا بالظبط
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -55,36 +56,22 @@ API_KEYS = [
     os.environ.get('GEMINI_API_KEY')
 ]
 API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
+current_key_index = 0
 BOT_USERNAME = ""
 BOT_ID = None
+user_memory = {}
 
-MEMORY_FILE = "user_memory_cache.json"
-
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except: return {}
-    return {}
-
-def save_memory(mem_data):
-    try:
-        if len(mem_data) > 500:
-            keys_to_remove = list(mem_data.keys())[:100]
-            for k in keys_to_remove:
-                mem_data.pop(k, None)
-        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(mem_data, f, ensure_ascii=False, indent=4)
-    except: pass
-
-user_memory = load_memory()
-
-def get_random_ai_client():
+def get_next_ai_client():
+    global current_key_index
     if not API_KEYS:
         fallback_key = os.environ.get('GEMINI_API_KEY')
         return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
-    return genai.Client(api_key=random.choice(API_KEYS))
+    return genai.Client(api_key=API_KEYS[current_key_index])
+
+def rotate_key():
+    global current_key_index
+    if API_KEYS and len(API_KEYS) > 1:
+        current_key_index = (current_key_index + 1) % len(API_KEYS)
 
 def text_to_live_voice(text_data):
     try:
@@ -100,7 +87,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.message.chat_id
     user = update.message.from_user
-    user_id = str(user.id) if user else str(chat_id)
+    user_id = user.id if user else chat_id
     username = f"@{user.username}" if user and user.username else "بدون معرف"
     chat_type = update.message.chat.type
     chat_title = update.message.chat.title if update.message.chat.title else "مجموعة"
@@ -110,8 +97,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.caption: user_text = update.message.caption.strip()
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
-    
-    # فرتقة الريكورد الفورية
+
+    # 📥 تفكيك سريع للريكورد لو موجود بدون تعقيد السيرفرات
     if is_incoming_voice:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -119,7 +106,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_file = await context.bot.get_file(file_id)
             voice_bytes = await tg_file.download_as_bytearray()
             
-            ai_client = get_random_ai_client()
+            ai_client = get_next_ai_client()
             audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
             trans_response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -129,19 +116,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_text = trans_response.text.strip()
         except: pass
 
-    # سيستم توجيه اللوق الذكي لخاص الأدمن 
-    if ADMIN_ID and int(user_id) != ADMIN_ID:
+    # 📡 سيستم توجيه اللوق الذكي المفرز (خاص / مجموعة) لخاصك
+    if ADMIN_ID and user_id != ADMIN_ID:
         try:
-            log_tag = "[المجموعة]" if chat_type in ['group', 'supergroup'] else "[الخاص]"
-            group_info = f"• *اسم الجروب:* {chat_title}\n" if chat_type in ['group', 'supergroup'] else ""
-            log_message = (
-                f"📥 *{log_tag}*\n"
-                f"{group_info}"
-                f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
-                f"• *المعرف:* {username}\n"
-                f"• *الـ ID:* `{user_id}`\n"
-                f"• *النص/المحتوى:* {user_text if user_text else '[ريكورد فارغ]'}"
-            )
+            if chat_type in ['group', 'supergroup']:
+                log_message = (
+                    f"📥 *[المجموعة]*\n"
+                    f"• *اسم الجروب:* {chat_title}\n"
+                    f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
+                    f"• *المعرف:* {username}\n"
+                    f"• *الـ ID:* `{user_id}`\n"
+                    f"• *النص:* {user_text if user_text else '[ريكورد]'}"
+                )
+            else:
+                log_message = (
+                    f"📥 *[الخاص]*\n"
+                    f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
+                    f"• *المعرف:* {username}\n"
+                    f"• *الـ ID:* `{user_id}`\n"
+                    f"• *النص:* {user_text if user_text else '[ريكورد]'}"
+                )
             await context.bot.send_message(chat_id=ADMIN_ID, text=log_message, parse_mode="Markdown")
         except: pass
 
@@ -152,7 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_ID = bot_info.id
         except: pass
 
-    # قاموس الـ 35 رد تلقائي الجاهزة
+    # قاموس الـ 35 رد تلقائي الجاهزة والمثبتة لـ "ياسمين القديمة"
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -195,20 +189,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_voice_intent = is_incoming_voice
     voice_triggers = ['ريكورد', 'صوتية', 'فويس', 'تسجيل', 'صوت', 'اسمعي', 'قولي']
+
     if user_text:
         text_check = user_text.lower()
         if any(vt in text_check for vt in voice_triggers): is_voice_intent = True
 
-    # 🔓 فتح الشارع 24 ساعة: شلنا الـ 15% العشوائية عشان ترد طوالي بدون تفويت
     if chat_type in ['group', 'supergroup']:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
-        # لو ما نادوها، وما ردوا عليها، وما كان ريكورد 👈 برضه حترد على الونسة العادية ومستحيل تسكت!
-        pass 
+        if not (is_explicit or is_direct_reply or is_voice_intent):
+            if random.random() > 0.15: return
 
     sys_instruction = "أنتِ اسمك ياسمين، بنت سودانية عفوية وخفيفة دم. ردي بلهجة سودانية ظريفة ومرحة والردود سطرين بس."
 
-    user_memory = load_memory()
     if user_id not in user_memory:
         user_memory[user_id] = []
         
@@ -220,7 +213,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents_list.append(current_prompt)
 
     try:
-        ai_client = get_random_ai_client()
+        ai_client = get_next_ai_client()
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=contents_list,
@@ -234,8 +227,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_memory[user_id].append(f"ياسمين: {reply_result}")
             if len(user_memory[user_id]) > 6:
                 user_memory[user_id] = user_memory[user_id][-6:]
-            
-            save_memory(user_memory)
 
             if is_voice_intent:
                 voice_io = text_to_live_voice(reply_result)
@@ -247,11 +238,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply_result)
             
     except Exception as e:
-        print(f"❌ خطأ: {e}")
+        print(f"خطأ Gemini: {e}")
+        rotate_key()
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين النشطة 24 ساعة ردم متواصل جوة المجموعات...")
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
+    print("🚀 العودة للأصل: تشغيل ياسمين السلسة الظريفة القديمة الخفيفة...")
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     all_media_filter = filters.TEXT | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
     app.run_polling()
