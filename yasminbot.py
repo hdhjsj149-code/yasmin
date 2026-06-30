@@ -60,7 +60,7 @@ BOT_ID = None
 user_memory = {}
 processed_messages = set()
 
-# --- دالة جروك مع طباعة الخطأ الفعلي الحاسم ---
+# --- دالة جروك المحدثة بالموديل الجديد الشغال هسة (Llama 3.1 8B) ---
 def ask_groq(prompt):
     if not GROQ_KEYS: 
         print("⚠️ تحذير: قائمة GROQ_KEYS فارغة تماماً في ريندر!", flush=True)
@@ -70,9 +70,8 @@ def ask_groq(prompt):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         
-        # جربنا هنا الموديل الأكثر استقراراً في جروك
         data = {
-            "model": "llama3-70b-8192", 
+            "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
@@ -87,7 +86,7 @@ def ask_groq(prompt):
         print(f"🚨 خطأ سيرفر Groq الفعلي هو: {e}", flush=True)
         return None
 
-# --- دالة أوبن راوتر مع طباعة الخطأ الفعلي الحاسم ---
+# --- دالة أوبن راوتر المحدثة بالموديل الـ Free الجديد (Llama 3.1 8B Free) ---
 def ask_openrouter(prompt):
     if not OPENROUTER_KEYS:
         print("⚠️ تحذير: قائمة OPENROUTER_KEYS فارغة تماماً في ريندر!", flush=True)
@@ -98,11 +97,11 @@ def ask_openrouter(prompt):
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://render.com", # إضافة إجبارية لبعض الحسابات
+            "HTTP-Referer": "https://render.com", 
             "X-Title": "YasminBot"
         }
         data = {
-            "model": "meta-llama/llama-3-8b-instruct:free",
+            "model": "meta-llama/llama-3.1-8b-instruct:free",
             "messages": [{"role": "user", "content": prompt}]
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
@@ -238,7 +237,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("معليش يا غالي، السيرفرات كلها كابسة هسة، ثواني وجرب رسل تاني! 5️⃣0️⃣٢")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الهجينة بكاشف أخطاء البدلاء...")
+    print("🚀 تشغيل ياسمين الهجينة بالموديلات الجديدة والشغالة...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
