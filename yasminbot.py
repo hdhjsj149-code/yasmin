@@ -45,9 +45,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-
-# 🎯 حط الـ ID حق حسابك الشخصي هنا عشان اللوج يوصلك في الخاص
-ADMIN_ID = 7601281598  # 👈 اكتب الـ ID حقك هنا بالظبط
+ADMIN_ID = 7601281598  # 👈 حط الـ ID حقك هنا عشان يوصلك اللوج
 
 API_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
@@ -98,7 +96,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
 
-    # 📥 تفكيك سريع للريكورد لو موجود بدون تعقيد السيرفرات
+    # 📥 تفكيك سريع للريكورد لو موجود طيارة
     if is_incoming_voice:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -116,26 +114,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_text = trans_response.text.strip()
         except: pass
 
-    # 📡 سيستم توجيه اللوق الذكي المفرز (خاص / مجموعة) لخاصك
+    # 📡 سيستم اللوق الذكي لخاص الأدمن
     if ADMIN_ID and user_id != ADMIN_ID:
         try:
-            if chat_type in ['group', 'supergroup']:
-                log_message = (
-                    f"📥 *[المجموعة]*\n"
-                    f"• *اسم الجروب:* {chat_title}\n"
-                    f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
-                    f"• *المعرف:* {username}\n"
-                    f"• *الـ ID:* `{user_id}`\n"
-                    f"• *النص:* {user_text if user_text else '[ريكورد]'}"
-                )
-            else:
-                log_message = (
-                    f"📥 *[الخاص]*\n"
-                    f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
-                    f"• *المعرف:* {username}\n"
-                    f"• *الـ ID:* `{user_id}`\n"
-                    f"• *النص:* {user_text if user_text else '[ريكورد]'}"
-                )
+            log_tag = "[المجموعة]" if chat_type in ['group', 'supergroup'] else "[الخاص]"
+            group_info = f"• *اسم الجروب:* {chat_title}\n" if chat_type in ['group', 'supergroup'] else ""
+            log_message = (
+                f"📥 *{log_tag}*\n"
+                f"{group_info}"
+                f"• *الاسم:* {user.first_name if user else 'مجهول'}\n"
+                f"• *المعرف:* {username}\n"
+                f"• *الـ ID:* `{user_id}`\n"
+                f"• *النص:* {user_text if user_text else '[ريكورد فارغ]'}"
+            )
             await context.bot.send_message(chat_id=ADMIN_ID, text=log_message, parse_mode="Markdown")
         except: pass
 
@@ -146,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_ID = bot_info.id
         except: pass
 
-    # قاموس الـ 35 رد تلقائي الجاهزة والمثبتة لـ "ياسمين القديمة"
+    # قاموس الردود الفورية التلقائية السلسة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -179,7 +170,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'الحنك شنو': 'الحنك عندك إنت، أنا جاهزة ومستعدة لأي طلب أو ونسة قاطعة 😉',
         'سوي فويس': 'من عيوني! أرسل لي ريكورد أو أسألني وأنا برد ليك طوالي بصوتي 🎧',
         'أعملي فويس': 'حاضر، إنت بس اتكلم معاي بالصوت وحتشوف أحلى ردي فويس مروق ✨',
-        'مع السلامة': 'في أمان الله ورعايته يا غالي، ما تطول الغيبة علينا! 🌟',
+        'مع السلامة': 'في أمان الله ورعايته يا غالي, ما تطول الغيبة علينا! 🌟',
         'باي': 'باي يا حبيب، تشرفنا بيك وفي منتظرك ترجع طوالي قريباً 👋'
     }
     
@@ -187,43 +178,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
+    # فحص نية الصوت والريكوردات
     is_voice_intent = is_incoming_voice
     voice_triggers = ['ريكورد', 'صوتية', 'فويس', 'تسجيل', 'صوت', 'اسمعي', 'قولي']
-
     if user_text:
         text_check = user_text.lower()
         if any(vt in text_check for vt in voice_triggers): is_voice_intent = True
 
+    # نسبة التفويت للمجموعات لضمان عدم الخنق وسرعة الاستجابة
     if chat_type in ['group', 'supergroup']:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
         if not (is_explicit or is_direct_reply or is_voice_intent):
-            if random.random() > 0.15: return
+            if random.random() > 0.20: return
 
     sys_instruction = "أنتِ اسمك ياسمين، بنت سودانية عفوية وخفيفة دم. ردي بلهجة سودانية ظريفة ومرحة والردود سطرين بس."
 
     if user_id not in user_memory:
         user_memory[user_id] = []
-        
-    contents_list = []
-    for past_msg in user_memory[user_id]:
-        contents_list.append(past_msg)
 
-    current_prompt = f"المستخدم: {user_text}" if user_text else "المستخدم أرسل ريكورد فارغ"
-    contents_list.append(current_prompt)
-
+    # معالجة النصوص والرد الذكي المباشر والسلس بدون تعقيد الـ Format القديم
     try:
         ai_client = get_next_ai_client()
+        
+        # بنرسل النص الحالي مباشرة مع صياغة النظام لضمان السرعة القصوى وعدم ضرب الـ API
+        full_prompt = f"{sys_instruction}\n\nالرسائل السابقة:\n"
+        for msg in user_memory[user_id]:
+            full_prompt += f"{msg}\n"
+        full_prompt += f"المستخدم حالياً يقول: {user_text if user_text else '[أرسل ريكورد]'}"
+
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=contents_list,
-            config=types.GenerateContentConfig(system_instruction=sys_instruction)
+            contents=full_prompt
         )
         
         if response.text:
             reply_result = response.text.strip()
             
-            user_memory[user_id].append(current_prompt)
+            # حفظ الذاكرة الخفيفة في الـ RAM
+            user_memory[user_id].append(f"المستخدم: {user_text}")
             user_memory[user_id].append(f"ياسمين: {reply_result}")
             if len(user_memory[user_id]) > 6:
                 user_memory[user_id] = user_memory[user_id][-6:]
@@ -238,12 +231,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply_result)
             
     except Exception as e:
-        print(f"خطأ Gemini: {e}")
+        print(f"خطأ Gemini الصامت: {e}")
         rotate_key()
+        # رد احتياطي سريع وذكي عشان البوت ما يظهر ميت لو الـ API علق ثانية
+        try:
+            await update.message.reply_text("معليش يا غالي، الشبكة كبست معاي ثانية بس! أعد كلامك؟ راسي لَفَّ 😅")
+        except: pass
 
 if __name__ == '__main__':
-    print("🚀 العودة للأصل: تشغيل ياسمين السلسة الظريفة القديمة الخفيفة...")
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    print("🚀 تشغيل ياسمين السلسة والصلبة: حل مشكلة عدم الرد على الونسة العادية...")
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(20).write_timeout(20).build()
     all_media_filter = filters.TEXT | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
     app.run_polling()
