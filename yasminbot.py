@@ -46,31 +46,29 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 👈 حط الـ ID حقك هنا عشان يوصلك اللوج طوالي
+ADMIN_ID = 7601281598  # 👈 حط الـ ID حقك هنا عشان يوصلك اللوج
 
-API_KEYS = [
+# جمع وتأكيد المفاتيح بشكل صارم
+RAW_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'),
     os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3'),
     os.environ.get('GEMINI_API_KEY')
 ]
-API_KEYS = [key.strip() for key in API_KEYS if key and key.strip()]
-current_key_index = 0
+# تصفية القائمة من أي فراغات أو مفاتيح ميتة
+API_KEYS = [k.strip() for k in RAW_KEYS if k and len(k.strip()) > 10]
+
 BOT_USERNAME = ""
 BOT_ID = None
 user_memory = {}
 
-def get_next_ai_client():
-    global current_key_index
-    if not API_KEYS:
-        fallback_key = os.environ.get('GEMINI_API_KEY')
-        return genai.Client(api_key=fallback_key.strip() if fallback_key else None)
-    return genai.Client(api_key=API_KEYS[current_key_index])
-
-def rotate_key():
-    global current_key_index
-    if API_KEYS and len(API_KEYS) > 1:
-        current_key_index = (current_key_index + 1) % len(API_KEYS)
+def get_random_ai_client():
+    # اختيار عشوائي حقيقي لمنع الـ Infinite Loop وضغط الـ API
+    if API_KEYS:
+        selected_key = random.choice(API_KEYS)
+        return genai.Client(api_key=selected_key)
+    fallback = os.environ.get('GEMINI_API_KEY')
+    return genai.Client(api_key=fallback.strip() if fallback else None)
 
 def text_to_live_voice(text_data):
     try:
@@ -97,7 +95,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
 
-    # 📥 تفكيك الريكورد
+    # 📥 تفكيك الريكورد الفوري
     if is_incoming_voice:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -105,7 +103,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tg_file = await context.bot.get_file(file_id)
             voice_bytes = await tg_file.download_as_bytearray()
             
-            ai_client = get_next_ai_client()
+            ai_client = get_random_ai_client()
             audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
             trans_response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -114,7 +112,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if trans_response.text:
                 user_text = trans_response.text.strip()
         except Exception as e:
-            print(f"❌ خطأ في تفكيك الريكورد: {e}", flush=True)
+            print(f"❌ خطأ الريكورد: {e}", flush=True)
 
     # 📡 سيستم اللوق الذكي لخاص الأدمن
     if ADMIN_ID and user_id != ADMIN_ID:
@@ -139,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_ID = bot_info.id
         except: pass
 
-    # قاموس الردود الجاهزة (شغالة 100% وبسرعة)
+    # قاموس الردود الفورية الجاهزة والسريعة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -186,7 +184,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text_check = user_text.lower()
         if any(vt in text_check for vt in voice_triggers): is_voice_intent = True
 
-    # نسبة التفويت للمجموعات
+    # تفويت الجروبات (معطل تلقائياً بما إنك شغال خاص هسة)
     if chat_type in ['group', 'supergroup']:
         is_explicit = (user_text and (BOT_USERNAME in user_text or "ياسمين" in user_text))
         is_direct_reply = (update.message.reply_to_message and update.message.reply_to_message.from_user.id == BOT_ID)
@@ -197,19 +195,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_memory[user_id] = []
 
     try:
-        ai_client = get_next_ai_client()
+        ai_client = get_random_ai_client()
         
-        # 🛠️ دمج التوجيهات جوة الـ Prompt نفسه بشكل مباشر كـ سياق أساسي لحل مشكلة الـ Config تماماً
+        # دمج آمن ومباشر لحل تعارض الإعدادات
         prompt_content = (
-            "تعليمات النظام الأساسية والملزمة لك:\n"
-            "أنتِ اسمك ياسمين، بنت سودانية عفوية وخفيفة دم. ردي بلهجة سودانية ظريفة ومرحة والردود سطرين بس.\n\n"
-            "سياق الونسة السابقة:\n"
+            "تعليمات ملزمة: أنتِ اسمك ياسمين، بنت سودانية عفوية وخفيفة دم. ردي بلهجة سودانية ظريفة ومرحة والردود سطرين بس.\n\n"
+            "الونسة السابقة:\n"
         )
         for msg in user_memory[user_id]:
             prompt_content += f"{msg}\n"
         prompt_content += f"المستخدم حالياً يقول: {user_text if user_text else '[أرسل ريكورد]'}\nياسمين:"
 
-        # استدعاء مباشر وسلس بدون تعقيد الخيارات
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt_content
@@ -234,12 +230,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     except Exception as e:
-        # هنا حيطبع ليك الخطأ الحقيقي بالملي في ريندر عشان نقبضه
         print(f"🚨 خطأ الـ API الفعلي هو: {e}", flush=True)
-        rotate_key()
 
 if __name__ == '__main__':
-    print("🚀 تشغيل النسخة الحاسمة النظيفة تماماً...")
+    print("🚀 تشغيل ياسمين الفولاذية بنظام التوزيع العشوائي للمفاتيح المضمون...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(20).write_timeout(20).build()
     all_media_filter = filters.TEXT | filters.AUDIO | filters.VOICE
     app.add_handler(MessageHandler(all_media_filter & ~filters.COMMAND, handle_message))
