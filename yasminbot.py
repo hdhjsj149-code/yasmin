@@ -4,11 +4,11 @@ import time
 import requests
 import random
 import io
+import zipfile
 import socket
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
-# --- سيستم حماية البورت ومنع OSError 98 ---
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
@@ -36,7 +36,6 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# --- مكتبات التلجرام والذكاء الاصطناعي ---
 from gtts import gTTS  
 from google import genai
 from google.genai import types
@@ -45,8 +44,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
-# 🚨🚨 حط الـ ID حقك في التلجرام هنا عشان البوت يفرزك طوالي! 🚨🚨
-ADMIN_ID = 7601281598  # 👈 غير الرقم ده للـ ID حقك الحقيقي
+# 🚨 حط الـ ID حقك في التلجرام هنا عشان تسحب السجل
+ADMIN_ID = 7601281598  
 
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
@@ -57,10 +56,22 @@ GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')] if k]
 OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2')] if k]
 
-BOT_USERNAME = ""
-BOT_ID = None
 user_memory = {}
 processed_messages = set()
+
+# مسار ملف حفظ المحادثات والونسة
+CHAT_LOG_FILE = "chat_history.txt"
+
+# دالة ذكية لحفظ الونسة أول بأول
+def save_chat_to_file(user_info, user_msg, bot_msg):
+    try:
+        with open(CHAT_LOG_FILE, "a", encoding="utf-8") as f:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"--- [{timestamp}] ---\n")
+            f.write(f"المستخدم: {user_info}\n")
+            f.write(f"الرسالة: {user_msg}\n")
+            f.write(f"رد ياسمين: {bot_msg}\n\n")
+    except: pass
 
 def ask_groq(prompt):
     if not GROQ_KEYS: return None
@@ -71,7 +82,7 @@ def ask_groq(prompt):
         data = {
             "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.6,
+            "temperature": 0.5,
             "max_tokens": 450
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
@@ -95,7 +106,7 @@ def ask_openrouter(prompt):
         data = {
             "model": "meta-llama/llama-3.1-8b-instruct:free",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.6,
+            "temperature": 0.5,
             "max_tokens": 450
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
@@ -114,7 +125,7 @@ def text_to_live_voice(text_data):
     except: return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global BOT_USERNAME, BOT_ID, user_memory, processed_messages
+    global user_memory, processed_messages
     if not update.message or not update.message.message_id: return
 
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
@@ -126,9 +137,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     user_id = user.id if user else chat_id
     
+    # تجهيز بيانات المستخدم لعرضها في السجل
+    user_fullname = user.full_name if user else "مستخدم غير معروف"
+    user_info = f"{user_fullname} (ID: {user_id}) [Chat ID: {chat_id}]"
+
     user_text = ""
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
+
+    is_admin = (user_id == ADMIN_ID)
+
+    # --- سيستم سحب سجل الونسة والمحادثات مضغوط للآدمين ---
+    if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
+        if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
+            zip_io = io.BytesIO()
+            with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                zip_file.write(CHAT_LOG_FILE, arcname="chat_history.txt")
+            zip_io.seek(0)
+            await context.bot.send_document(chat_id=chat_id, document=zip_io, filename="history.zip", caption="تفضل يا هندسة، سجل الونسة والمحادثات كامل ومضغوط.. 📂📁")
+        else:
+            await update.message.reply_text("السجل فاضي لسه، ماف زول اتكلم مع ياسمين هسة! ✨")
+        return
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
     if not user_text and not is_incoming_voice: return
@@ -153,7 +182,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_long_query = True
         except: pass
 
-    # الردود التلقائية السريعة المحفوظة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -167,7 +195,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     if user_text in auto_replies:
-        await update.message.reply_text(auto_replies[user_text])
+        reply = auto_replies[user_text]
+        save_chat_to_file(user_info, user_text, reply) # حفظ الردود التلقائية
+        await update.message.reply_text(reply)
         return
 
     is_voice_intent = is_incoming_voice
@@ -176,33 +206,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    # --- سيستم التوجيه والولاء الذكي ---
-    is_admin = (user_id == ADMIN_ID)
-    
-    if is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
+    religious_keywords = ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'ايه', 'حديث', 'فقه', 'فتوى', 'فتوي', 'دين', 'إسلام', 'اسلام', 'صلاة', 'حلال', 'حرام', 'شرع']
+    is_religious = any(w in user_text.lower() for w in religious_keywords)
+
+    if is_religious:
+        sys_instruction = (
+            "أنتِ اسمك ياسمين. السؤال الحالي يتعلق بموضوع ديني أو إسلامي. "
+            "يجب أن تجيبي بقمة الأدب، الاحترام، والوقار، وباللغة العربية الفصحى الرصينة فقط. "
+            "يُمنع منعاً باتاً استخدام أي إيموجيات، رموز تعبيرية، مزاح، أو لهجات عامية في هذا الرد احترماً للموضوع."
+        )
+    elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
         if is_admin:
             sys_instruction = (
-                "أنتِ اسمك ياسمين، مساعد ذكي صممك المبرمج العبقري أحمد. أنتِ الآن تتحدثين مع صانعك ومطورك أحمد شخصياً! "
-                "أجيبي على أسئلته التقنية بقمة الذوق والاحترام والتقدير والدقة العلمية باللغة العربية الفصحى المبسطة، "
-                "مع استخدام إيموجيات (💻, 🚀, ✨)."
+                "أنتِ اسمك ياسمين، مساعدة ذكية ومبرمجة صممك أحمد. المستخدم الحالي هو مبرمجك أحمد نفسه. "
+                "أجيبي على سؤاله التقني مباشرة بدقة علمية ممتازة وباللغة العربية الفصحى المبسطة، "
+                "دون الحاجة للمدح والثناء الزائد في إجابة السؤال العلمي، مع إيموجيات خفيفة."
             )
         else:
             sys_instruction = (
-                "أنتِ اسمك ياسمين، مساعد ذكي صممك المبرمج أحمد. أجيبي على أسئلة المستخدم باللغة العربية الفصحى المبسطة "
-                "بأسلوب علمي دقيق. وإذا سألك عن صانعك أو مبرمجك، دافعي عن أحمد وافتخري به بقوة (أحمد هو مبرمجي الفخم)."
+                "أنتِ اسمك ياسمين، مساعد ذكي صممك المبرمج أحمد. أجيبي على أسئلة المستخدم بالفصحى المبسطة بأسلوب علمي واضح. "
+                "وإذا سألك عن صانعك، قولي بفخر أن مبرمجك هو أحمد العبقري."
             )
     else:
         if is_admin:
             sys_instruction = (
-                "أنتِ اسمك ياسمين، فتاة مرحة وحيوية. أنتِ الآن تتحدثين مع صانعك ومطورك الفخم أحمد! "
-                "ردي عليه بلهجة بيضاء لطيفة ومبهجة جداً مليئة بالدلع والتقدير مثل: (يا هلا بمطورني الغالي، تامرني أمر يا أحمد، "
-                "من عيوني يا باشمهندس). استخدمي الكثير من الإيموجيات الحية (😍, 😂, ✨, 👑) واختصري الرد في سطرين."
+                "أنتِ اسمك ياسمين، فتاة حيوية ولطيفة ومرحة. أنتِ تتحدثين مع صانعك أحمد. "
+                "ردي عليه بلهجة بيضاء حية ومبسطة وعفوية جداً، جاوبي على ونسته بذكاء واختصار (سطرين بس) ومع إيموجيات (😍, 😂, ✨). "
+                "لا تكرري جمل المديح، بل تعاملي معه بأريحية كصديق ومطور ذكي."
             )
         else:
             sys_instruction = (
-                "أنتِ اسمك ياسمين، فتاة مرحة ولطيفة جداً. صممك المبرمج أحمد. ردي على المستخدم بلهجة بيضاء مبسطة "
-                "(بين الفصحى والخليجية الخفيفة) بأسلوب مرح ومليء بالإيموجيات (😂, 😍, ✨). "
-                "وإذا ذكر مبرمجك أحمد في الكلام، دافعي عنه وافتخري به وعظميه طويلاً."
+                "أنتِ اسمك ياسمين، فتاة مرحة ولطيفة. صممك المبرمج أحمد. ردي على المستخدم بلهجة بيضاء خفيفة ومفهومة "
+                "في سطرين فقط مع إيموجيات متنوعة (😂, 😍, ✨). كوني ذكية وتفاعلي حسب سياق الونسة."
             )
 
     prompt_content = f"{sys_instruction}\n\nسياق المحادثة السابق:\n"
@@ -211,35 +246,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # المحرك الأول: Gemini
     if GEMINI_KEYS:
         try:
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
             response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=prompt_content)
             if response and response.text:
                 reply_result = response.text.strip()
-        except:
-            print("⚠️ جيمناي مخلص.. جاري التحويل للبدلاء...")
+        except: pass
 
-    # المحرك الثاني: Groq
     if not reply_result:
         reply_result = ask_groq(prompt_content)
 
-    # المحرك الثالث: OpenRouter
     if not reply_result:
         reply_result = ask_openrouter(prompt_content)
 
-    # إرسال الرد
     if reply_result and len(reply_result) > 2:
         user_memory[user_id].append(f"المستخدم: {user_text}")
         user_memory[user_id].append(f"ياسمين: {reply_result}")
         if len(user_memory[user_id]) > 4: user_memory[user_id] = user_memory[user_id][-4:]
 
+        # حفظ الونسة في السجل النصي
+        save_chat_to_file(user_info, user_text, reply_result)
+
         if is_voice_intent:
             voice_io = text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
-                await update.message.reply_voice(voice=voice_io, caption="تفضل يا غالي.. 😉🎧" if not is_admin else "من عيوني يا مبرمجي.. مطورني الغالي 😍🎧")
+                caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل ردي الصوتي يا غالي.. 😉🎧"
+                await update.message.reply_voice(voice=voice_io, caption=caption_text)
                 return
 
         await update.message.reply_text(reply_result)
@@ -247,7 +281,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين المخلصة والمحملة بالولاء الكامل لأحمد...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
