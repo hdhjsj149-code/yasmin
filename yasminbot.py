@@ -44,7 +44,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # 👈 حط الـ ID حقك هنا
+
+# 🚨🚨 حط الـ ID حقك في التلجرام هنا عشان البوت يفرزك طوالي! 🚨🚨
+ADMIN_ID = 7601281598  # 👈 غير الرقم ده للـ ID حقك الحقيقي
 
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
@@ -60,18 +62,16 @@ BOT_ID = None
 user_memory = {}
 processed_messages = set()
 
-# --- دالة جروك الملطفة والموزونة ---
 def ask_groq(prompt):
     if not GROQ_KEYS: return None
     try:
         key = random.choice(GROQ_KEYS)
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        
         data = {
             "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.6,  # رفع الحيوية قليلاً لتفاعل أفضل
+            "temperature": 0.6,
             "max_tokens": 450
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
@@ -79,10 +79,8 @@ def ask_groq(prompt):
         if 'choices' in res_json:
             return res_json['choices'][0]['message']['content'].strip()
         return None
-    except: 
-        return None
+    except: return None
 
-# --- دالة أوبن راوتر الملطفة والموزونة ---
 def ask_openrouter(prompt):
     if not OPENROUTER_KEYS: return None
     try:
@@ -105,8 +103,7 @@ def ask_openrouter(prompt):
         if 'choices' in res_json:
             return res_json['choices'][0]['message']['content'].strip()
         return None
-    except:
-        return None
+    except: return None
 
 def text_to_live_voice(text_data):
     try:
@@ -156,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_long_query = True
         except: pass
 
-    # الردود التلقائية السريعة المحفوظة بالعامية السودانية (مباشرة وسريعة)
+    # الردود التلقائية السريعة المحفوظة
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور الجت يا غالي! 🌹',
         'الأخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
@@ -179,20 +176,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    # التوجيه الذكي الجديد: خلطة الخليجي الأبيض المليء بالحيوية والإيموجيهات
+    # --- سيستم التوجيه والولاء الذكي ---
+    is_admin = (user_id == ADMIN_ID)
+    
     if is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
-        sys_instruction = (
-            "أنتِ اسمك ياسمين، مساعدة ذكية ومبرمجة عبقرية صممك أحمد. "
-            "أجيبي على أسئلة المستخدم بأسلوب تقني مفيد، دقيق جداً وواضح باللغة العربية الفصحى اللطيفة والمبسطة، "
-            "مع إدراج إيموجيات تناسب الكلام (مثل: 💻, 🚀, ✨) لتلطيف الإجابة ومنع الجفاف."
-        )
+        if is_admin:
+            sys_instruction = (
+                "أنتِ اسمك ياسمين، مساعد ذكي صممك المبرمج العبقري أحمد. أنتِ الآن تتحدثين مع صانعك ومطورك أحمد شخصياً! "
+                "أجيبي على أسئلته التقنية بقمة الذوق والاحترام والتقدير والدقة العلمية باللغة العربية الفصحى المبسطة، "
+                "مع استخدام إيموجيات (💻, 🚀, ✨)."
+            )
+        else:
+            sys_instruction = (
+                "أنتِ اسمك ياسمين، مساعد ذكي صممك المبرمج أحمد. أجيبي على أسئلة المستخدم باللغة العربية الفصحى المبسطة "
+                "بأسلوب علمي دقيق. وإذا سألك عن صانعك أو مبرمجك، دافعي عن أحمد وافتخري به بقوة (أحمد هو مبرمجي الفخم)."
+            )
     else:
-        sys_instruction = (
-            "أنتِ اسمك ياسمين، فتاة مرحة، حيوية ولطيفة جداً. "
-            "ردي على ونسة المستخدم العادية بلهجة بيضاء مبسطة (مزيج مفهوم بين الفصحى الخفيفة والخليجية الدارجة). "
-            "تكلمي بعفوية مثل: (يا هلا والله، من عيوني، أبشر يا غالي، تامرني)، واختصري الرد في سطرين فقط، "
-            "واستخدمي الكثير من الإيموجيات الحية والمرحة في كل رد (مثل: 😂, 😍, شفت كيف؟, ✨, 🙏) لتكوني مليئة بالروح والنشاط."
-        )
+        if is_admin:
+            sys_instruction = (
+                "أنتِ اسمك ياسمين، فتاة مرحة وحيوية. أنتِ الآن تتحدثين مع صانعك ومطورك الفخم أحمد! "
+                "ردي عليه بلهجة بيضاء لطيفة ومبهجة جداً مليئة بالدلع والتقدير مثل: (يا هلا بمطورني الغالي، تامرني أمر يا أحمد، "
+                "من عيوني يا باشمهندس). استخدمي الكثير من الإيموجيات الحية (😍, 😂, ✨, 👑) واختصري الرد في سطرين."
+            )
+        else:
+            sys_instruction = (
+                "أنتِ اسمك ياسمين، فتاة مرحة ولطيفة جداً. صممك المبرمج أحمد. ردي على المستخدم بلهجة بيضاء مبسطة "
+                "(بين الفصحى والخليجية الخفيفة) بأسلوب مرح ومليء بالإيموجيات (😂, 😍, ✨). "
+                "وإذا ذكر مبرمجك أحمد في الكلام، دافعي عنه وافتخري به وعظميه طويلاً."
+            )
 
     prompt_content = f"{sys_instruction}\n\nسياق المحادثة السابق:\n"
     for msg in user_memory[user_id]: prompt_content += f"{msg}\n"
@@ -200,7 +211,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # المحرك الأول: تجربة جلب الرد من Gemini
+    # المحرك الأول: Gemini
     if GEMINI_KEYS:
         try:
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
@@ -208,17 +219,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response and response.text:
                 reply_result = response.text.strip()
         except:
-            print("⚠️ جيمناي مخلص.. جاري التحويل للبدلاء بالحيوية الجديدة...", flush=True)
+            print("⚠️ جيمناي مخلص.. جاري التحويل للبدلاء...")
 
-    # المحرك الثاني البديل: Groq
+    # المحرك الثاني: Groq
     if not reply_result:
         reply_result = ask_groq(prompt_content)
 
-    # المحرك الثالث البديل الأخير: OpenRouter
+    # المحرك الثالث: OpenRouter
     if not reply_result:
         reply_result = ask_openrouter(prompt_content)
 
-    # إرسال النتيجة المبهجة
+    # إرسال الرد
     if reply_result and len(reply_result) > 2:
         user_memory[user_id].append(f"المستخدم: {user_text}")
         user_memory[user_id].append(f"ياسمين: {reply_result}")
@@ -228,7 +239,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             voice_io = text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
-                await update.message.reply_voice(voice=voice_io, caption="تفضل ردي الصوتي يا غالي.. 😉🎧")
+                await update.message.reply_voice(voice=voice_io, caption="تفضل يا غالي.. 😉🎧" if not is_admin else "من عيوني يا مبرمجي.. مطورني الغالي 😍🎧")
                 return
 
         await update.message.reply_text(reply_result)
@@ -236,7 +247,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
 
 if __name__ == '__main__':
-    print("🚀 تشغيل ياسمين الحيوية الملطفة بالإيموجيهات والروح التفاعلية...")
+    print("🚀 تشغيل ياسمين المخلصة والمحملة بالولاء الكامل لأحمد...")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
