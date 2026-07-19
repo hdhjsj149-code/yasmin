@@ -2,4 +2,4 @@ pyTelegramBotAPI
 python-telegram-bot
 google-genai
 requests
-edge-tts
+gTTS
