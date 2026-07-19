@@ -45,7 +45,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 541235478  # الـ ID حقك (لسحب اللوقات والتعرف عليك)
+ADMIN_ID = 7601281598  # الـ ID حقك (لسحب اللوقات والتعرف عليك)
 
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
@@ -103,10 +103,9 @@ def ask_openrouter(prompt):
         return None
     except: return None
 
-# دالة توليد الصوت الذكي المتطور والمجاني بالكامل بدلاً من جوجل الروبوتي
+# دالة توليد الصوت الذكي عبر edge-tts
 async def text_to_live_voice(text_data):
     try:
-        # اخترنا خامة صوت نسائية ذكية ومتناسقة (Omnya) ممتازة في نطق الكلمات العربية وتفهم اللهجات
         communicate = edge_tts.Communicate(text_data, "ar-EG-OmnyaNeural")
         voice_io = io.BytesIO()
         async for chunk in communicate.stream():
@@ -187,11 +186,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
-    if not user_text and not is_incoming_voice: return
-
-    is_long_query = len(user_text) > 40
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
+    
+    # 🚨 جزء معالجة وتفريغ الريكورد الصوتي الذكي الجديد 🚨
+    is_voice_intent = is_incoming_voice
     if is_incoming_voice and GEMINI_KEYS:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -201,13 +198,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
             audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
+            
             trans_response = ai_client.models.generate_content(
-                model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
+                model='gemini-2.5-flash', contents=[audio_part, "افهم الكلام المكتوب في هذا التسجيل الصوتي واكتبه لي كنص فقط بدون أي مقدمات."]
             )
             if trans_response.text:
                 user_text = trans_response.text.strip()
                 is_long_query = True
+                is_voice_intent = True 
         except: pass
+
+    if not user_text: return
+
+    is_long_query = len(user_text) > 40
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
@@ -228,7 +232,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    is_voice_intent = is_incoming_voice
     if user_text and any(vt in user_text.lower() for vt in ['ريكورد', 'فويس', 'صوت', 'اشرحي']):
         is_voice_intent = True
 
@@ -313,7 +316,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if is_voice_intent:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-            # استدعاء دالة الصوت الذكية الجديدة عبر الـ await
             voice_io = await text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
