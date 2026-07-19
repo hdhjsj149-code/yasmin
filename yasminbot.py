@@ -6,6 +6,7 @@ import random
 import io
 import zipfile
 import socket
+import asyncio
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -36,7 +37,7 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-from gtts import gTTS  
+import edge_tts
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -44,7 +45,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  
+ADMIN_ID = 541235478  # الـ ID حقك (لسحب اللوقات والتعرف عليك)
 
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
@@ -75,7 +76,7 @@ def ask_groq(prompt):
         data = {
             "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.8, # زيادة التلقائية والعفوية
+            "temperature": 0.8, 
             "max_tokens": 150
         }
         res = requests.post(url, json=data, headers=headers, timeout=12)
@@ -102,13 +103,20 @@ def ask_openrouter(prompt):
         return None
     except: return None
 
-def text_to_live_voice(text_data):
+# دالة توليد الصوت الذكي المتطور والمجاني بالكامل بدلاً من جوجل الروبوتي
+async def text_to_live_voice(text_data):
     try:
-        tts = gTTS(text=text_data, lang='ar', slow=False)
+        # اخترنا خامة صوت نسائية ذكية ومتناسقة (Omnya) ممتازة في نطق الكلمات العربية وتفهم اللهجات
+        communicate = edge_tts.Communicate(text_data, "ar-EG-OmnyaNeural")
         voice_io = io.BytesIO()
-        tts.write_to_fp(voice_io)
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                voice_io.write(chunk["data"])
+        voice_io.seek(0)
         return voice_io
-    except: return None
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_memory, processed_messages
@@ -132,13 +140,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text: user_text = update.message.text.strip()
     elif update.message.caption: user_text = update.message.caption.strip()
 
+    group_context_info = ""
+    sender_role = "عضو عادي"
+
     if chat_type in ['group', 'supergroup']:
         is_reply_to_bot = False
         if update.message.reply_to_message and update.message.reply_to_message.from_user:
             if update.message.reply_to_message.from_user.id == context.bot.id:
                 is_reply_to_bot = True
+        
         if "ياسمين" not in user_text and not is_reply_to_bot:
             return
+
+        try:
+            chat_data = await context.bot.get_chat(chat_id)
+            group_name = chat_data.title or "غير معروف"
+            group_description = chat_data.description or "لا يوجد وصف محدد"
+            admins = await context.bot.get_chat_administrators(chat_id)
+            admin_names = [f"{a.user.full_name} (ID: {a.user.id})" for a in admins if a.user]
+            
+            if any(a.user.id == user_id for a in admins if a.user):
+                sender_role = "مشرف (Admin) في المجموعة"
+            
+            pinned_msg = chat_data.pinned_message.text if chat_data.pinned_message else "لم يتم تثبيت قوانين محددة بعد"
+
+            group_context_info = (
+                f"\n--- معلومات المجموعة الحالية ---\n"
+                f"اسم الجروب الحالي: {group_name}\n"
+                f"وصف الجروب (حق شنو): {group_description}\n"
+                f"قائمة المشرفين الحالية: {', '.join(admin_names)}\n"
+                f"الرسالة المثبتة وقوانين الجروب: {pinned_msg}\n"
+                f"رتبة المستخدم الحالي الذي يتحدث معك: {sender_role}\n"
+            )
+        except:
+            group_context_info = "\n(فشل في جلب بعض بيانات المجموعة بسبب الصلاحيات)\n"
 
     if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
         if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
@@ -155,8 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text and not is_incoming_voice: return
 
     is_long_query = len(user_text) > 40
-
-    # إظهار حالة تفاعل بشرية فورية (جاري الكتابة)
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     if is_incoming_voice and GEMINI_KEYS:
@@ -169,8 +202,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
             audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
             trans_response = ai_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
+                model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
             )
             if trans_response.text:
                 user_text = trans_response.text.strip()
@@ -192,7 +224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_text in auto_replies:
         reply = auto_replies[user_text]
         save_chat_to_file(user_info, user_text, reply)
-        time.sleep(1) # تأخير خفيف للمحاكاة البشرية
+        time.sleep(1)
         await update.message.reply_text(reply)
         return
 
@@ -202,40 +234,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    # جلب التوقيت السوداني الحالي الحقيقي لدمجه في عقل ياسمين
     current_time_str = time.strftime('%I:%M %p')
     current_date_str = time.strftime('%A، %Y-%m-%d')
+
+    provocation_keywords = [
+        'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
+        'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
+        'يا وهم', 'وهمية', 'وهميه', 'سجمك', 'رمادك', 'قليلة ادب', 'قليلة أدب', 'بلا يخمك', 'طيري'
+    ]
+    is_provoked = any(word in user_text.lower() for word in provocation_keywords)
 
     religious_keywords = ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'ايه', 'حديث', 'فقه', 'فتوى', 'فتوي', 'دين', 'إسلام', 'اسلام', 'صلاة', 'حلال', 'حرام', 'شرع']
     is_religious = any(w in user_text.lower() for w in religious_keywords)
 
-    # سيستم التوجيه المحدث (الوعي بالزمن + الروح البشرية التلقائية)
     if is_religious:
         sys_instruction = (
             "أنتِ اسمك ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار، وباللغة العربية الفصحى الرصينة فقط. "
             "ممنوع استخدام الإيموجيات تماماً، واجعلي الرد دقيقاً ومختصراً في سطرين."
         )
-    elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
+    elif is_provoked:
         if is_admin:
             sys_instruction = (
-                f"الوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين."
+                f"أنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، لكنكِ تعرفين أنه يمزح معك. "
+                f"ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف (مثلاً: حسي أنا غبية يا أحمد؟ زعلتني منك.. 🥺). "
+                f"اجعلي الرد سطر واحد وعاطفي."
             )
         else:
             sys_instruction = (
-                "أنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً."
+                f"أنتِ ياسمين. هذا المستخدم قام باستفزازك. ردي عليه بدافع الدفاع عن النفس! "
+                f"كوني قوية الشخصية، حازمة، وناشفة جداً. ردي بلهجة سودانية صارمة تضع حداً للمستخدم دون شتائم "
+                f"(مثلاً: الزم حدودك يا أخ، أنا ما برضى الحقارة، اتكلم بأدب!). اجعلي الرد سطر واحد، واستخدمي إيموجيات حادة (🤨، 🛑، ✋)."
+            )
+    elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
+        if is_admin:
+            sys_instruction = (
+                f"الوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة دون أي قيود. {group_context_info}"
+            )
+        else:
+            sys_instruction = (
+                f"أنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً. {group_context_info}"
             )
     else:
         if is_admin:
             sys_instruction = (
                 f"الوقت الآن: {current_time_str}، التاريخ: {current_date_str}. أنتِ ياسمين، فتاة سودانية حقيقية وعفوية. "
-                "تتحدثين مع مبرمجك أحمد كصديق مقرب. ردي بروح إنسانية خفيفة، وبلهجة سودانية دافئة وتلقائية جداً. "
-                "اكتبي سطر واحد فقط ومختصر، واستخدمي كلمات من الواقع وإيموجيات حية، ولا تكرري الرسميات."
+                f"تتحدثين مع مبرمجك أحمد كصديق مقرب. ردي بروح إنسانية خفيفة، وبلهجة سودانية دافئة وتلقائية جداً. "
+                f"اكتبي سطر واحد فقط ومختصر، واستخدمي كلمات من الواقع وإيموجيات حية. {group_context_info}"
             )
         else:
             sys_instruction = (
                 f"الوقت الحالي: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية، لطيفة ومرحة. "
-                "ردي على ونسة المستخدم العادية بلهجة سودانية بيضاء خفيفة ومفهومة. تكلمي بروح بشرية وعفوية تامة وبإيجاز شديد "
-                "(سطر واحد فقط!)، واستخدمي إيموجيات (😂، 😍، ✨)."
+                f"ردي على ونسة المستخدم العادية بنفس أسلوبه: لو كان حنيناً كوني حنينة معه، ولو كان عفوياً كوني عفوية ومرحة. "
+                f"تكلمي بلهجة سودانية خفيفة، بروح بشرية كاملة وإيجاز شديد (سطر واحد فقط!)، واستخدمي إيموجيات متناسقة. {group_context_info}"
             )
 
     prompt_content = f"{sys_instruction}\n\nالونسة السابقة:\n"
@@ -262,9 +312,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_chat_to_file(user_info, user_text, reply_result)
 
         if is_voice_intent:
-            # محاكاة تسجيل الصوت
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-            voice_io = text_to_live_voice(reply_result)
+            # استدعاء دالة الصوت الذكية الجديدة عبر الـ await
+            voice_io = await text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
                 caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
