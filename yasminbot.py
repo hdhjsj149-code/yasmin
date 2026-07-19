@@ -6,7 +6,6 @@ import random
 import io
 import zipfile
 import socket
-import asyncio
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -37,7 +36,7 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-import edge_tts
+from gtts import gTTS  
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -103,19 +102,14 @@ def ask_openrouter(prompt):
         return None
     except: return None
 
-# دالة توليد الصوت الذكي عبر edge-tts
-async def text_to_live_voice(text_data):
+# رجعنا دالة gTTS القديمة والمضمونة
+def text_to_live_voice(text_data):
     try:
-        communicate = edge_tts.Communicate(text_data, "ar-EG-OmnyaNeural")
+        tts = gTTS(text=text_data, lang='ar', slow=False)
         voice_io = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                voice_io.write(chunk["data"])
-        voice_io.seek(0)
+        tts.write_to_fp(voice_io)
         return voice_io
-    except Exception as e:
-        print(f"TTS Error: {e}")
-        return None
+    except: return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_memory, processed_messages
@@ -186,9 +180,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
-    
-    # 🚨 جزء معالجة وتفريغ الريكورد الصوتي الذكي الجديد 🚨
-    is_voice_intent = is_incoming_voice
+    if not user_text and not is_incoming_voice: return
+
+    is_long_query = len(user_text) > 40
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    # المنطق القديم لقراءة فويس المستخدم عبر جيمناي
     if is_incoming_voice and GEMINI_KEYS:
         try:
             target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
@@ -198,20 +195,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
             audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
-            
             trans_response = ai_client.models.generate_content(
-                model='gemini-2.5-flash', contents=[audio_part, "افهم الكلام المكتوب في هذا التسجيل الصوتي واكتبه لي كنص فقط بدون أي مقدمات."]
+                model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
             )
             if trans_response.text:
                 user_text = trans_response.text.strip()
                 is_long_query = True
-                is_voice_intent = True 
         except: pass
-
-    if not user_text: return
-
-    is_long_query = len(user_text) > 40
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
@@ -232,6 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
+    is_voice_intent = is_incoming_voice
     if user_text and any(vt in user_text.lower() for vt in ['ريكورد', 'فويس', 'صوت', 'اشرحي']):
         is_voice_intent = True
 
@@ -260,7 +251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sys_instruction = (
                 f"أنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، لكنكِ تعرفين أنه يمزح معك. "
                 f"ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف (مثلاً: حسي أنا غبية يا أحمد؟ زعلتني منك.. 🥺). "
-                f"اجعلي الرد سطر واحد وعاطفي."
+                f"اجعي الرد سطر واحد وعاطفي."
             )
         else:
             sys_instruction = (
@@ -288,7 +279,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sys_instruction = (
                 f"الوقت الحالي: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية، لطيفة ومرحة. "
                 f"ردي على ونسة المستخدم العادية بنفس أسلوبه: لو كان حنيناً كوني حنينة معه، ولو كان عفوياً كوني عفوية ومرحة. "
-                f"تكلمي بلهجة سودانية خفيفة، بروح بشرية كاملة وإيجاز شديد (سطر واحد فقط!)، واستخدمي إيموجيات متناسقة. {group_context_info}"
+                f"تكلمي بلهجة سودانية خفيفة, بروح بشرية كاملة وإيجاز شديد (سطر واحد فقط!)، واستخدمي إيموجيات متناسقة. {group_context_info}"
             )
 
     prompt_content = f"{sys_instruction}\n\nالونسة السابقة:\n"
@@ -316,7 +307,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if is_voice_intent:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-            voice_io = await text_to_live_voice(reply_result)
+            voice_io = text_to_live_voice(reply_result)
             if voice_io:
                 voice_io.seek(0)
                 caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
