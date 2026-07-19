@@ -1,5 +1,5 @@
 pyTelegramBotAPI
 python-telegram-bot
 google-genai
-request
+requests
 edge-tts
