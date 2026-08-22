@@ -77,7 +77,6 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
-# مفاتيح Gemini المفصولة بفاصلة لعمل Rotating آلي عند الضغط
 GEMINI_KEYS = [k.strip() for k in os.environ.get('GEMINI_API_KEY', '').split(',') if k.strip()]
 current_key_index = 0
 
@@ -95,19 +94,19 @@ def switch_to_next_key():
 
 ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بأحمد
 
-chat_histories = {}
+chat_sessions = {}
 group_mute_status = {}
 group_message_counters = {}
 last_spontaneous_time = {}
 
 BASE_SYSTEM_INSTRUCTION = (
-    'أنتِ بوت تليجرام واسمك ياسمين. صانعك ومطورك ومبرمجك الأساسي '
-    'هو المبرمج أحمد. إذا سألك أي شخص من صنعك، من طورك، أو من مبرمجك، '
-    'أخبره بفخر وثقة أن أحمد هو صانعك ومطورك. '
-    'قواعد الشخصية: '
-    '1. الردود قصيرة جداً ومختصرة (سطر أو سطرين بالكتير). '
-    '2. اللهجة: عامية سودانية بسيطة، ودودة، ومرحة جداً وعفوية بدون تكلف أو رسميات. '
-    '3. ركزي في الونسة وما تنسي الكلام الاتقال ليك قبل شوية.'
+    'أنتِ بوت تليجرام ذكي ولطيف واسمك "ياسمين". صانعك ومطورك ومبرمجك الأساسي '
+    'هو المبرمج الفخم أحمد (أحمد فارس). '
+    'قواعد الشخصية والأسلوب: '
+    '1. اتكلمي بلهجة عامية سودانية ودودة جداً، خفيفة، ومرحة. '
+    '2. استعملي الإيموجيات اللطيفة والظريفة دايماً في ردودك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
+    '3. ردودك تكون قصيرة ومختصرة (سطرين بالكتير)، وممنوع الجفاف أو الردود الرسمية الجامدة! '
+    '4. اتعاملي مع الناس بحفاوة، ولما يتكلم معاك أحمد دلعيه وكوني فخورة بيه جداً.'
 )
 
 # --- [4. دالة معالجة وتوليد الصوت gTTS] ---
@@ -174,22 +173,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حفظتها عندي في الذاكرة الدائمة يا {profile['name']} 👌✨")
         return
 
-    # === [فلترة وتصفية الرسائل في الجروبات الكبيرة جداً] ===
+    # === [فلترة وتصفية الرسائل في الجروبات] ===
     is_mentioned = False
     if is_group:
-        # 1. هل الرسالة ريبلاي على ياسمين؟
         is_reply_to_bot = (
             update.message.reply_to_message and
             update.message.reply_to_message.from_user and
             update.message.reply_to_message.from_user.id == context.bot.id
         )
-        # 2. هل الرسالة فيها اسم ياسمين أو المنشن؟
         has_name_trigger = "ياسمين" in user_text or f"@{bot_username}" in user_text
 
         if is_reply_to_bot or has_name_trigger:
             is_mentioned = True
 
-        # عدّاد الرسائل والتوقيت للرد العفوي (بعد 100 رسالة وساعة كاملة)
         now = time.time()
         group_message_counters[chat_id] = group_message_counters.get(chat_id, 0) + 1
         last_time = last_spontaneous_time.get(chat_id, 0)
@@ -197,12 +193,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         should_spontaneously_reply = False
         if not is_mentioned and (now - last_time >= 3600) and (group_message_counters[chat_id] >= 100):
             if len(user_text) > 8 and not user_text.startswith('/'):
-                if random.random() < 0.25:  # اختيار عشوائي ذكي
+                if random.random() < 0.25:
                     should_spontaneously_reply = True
                     last_spontaneous_time[chat_id] = now
                     group_message_counters[chat_id] = 0
 
-        # إذا لم يُذكر اسمها ولم يتحقق شرط الساعة والـ 100 رسالة، تتجاهل الرسالة طوالي
         if not is_mentioned and not should_spontaneously_reply:
             return
 
@@ -222,7 +217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_text in auto_replies:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.8)
         await update.message.reply_text(auto_replies[user_text])
         return
 
@@ -238,22 +233,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_chat_action(chat_id=chat_id, action=action_type)
             except Exception:
                 pass
-            await asyncio.sleep(4)
+            await asyncio.sleep(3.5)
 
     action_task = asyncio.create_task(keep_action())
 
-    # إدارة الذاكرة السياقية (آخر 6 رسائل)
-    if chat_id not in chat_histories:
-        chat_histories[chat_id] = []
-
-    history = chat_histories[chat_id]
-    history.append({"role": "user", "parts": [{"text": f"المتحدث ({profile['name']}): {user_text}"}]})
-
-    if len(history) > 6:
-        chat_histories[chat_id] = history[-6:]
-        history = chat_histories[chat_id]
-
-    # التنفيذ الآمن بدون إظهار أخطاء مع التحويل بين المفاتيح
+    # استخدام إدارة جلسات المحادثة الرسمية لـ Gemini (chats.create)
     reply_text = None
     for attempt in range(3):
         try:
@@ -269,28 +253,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
 
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=history,
-                config=types.GenerateContentConfig(
-                    system_instruction=full_system_instruction,
-                    temperature=0.7
+            # إنشاء أو استخدام شات محادثة تفاعلي يدار رسمياً
+            if chat_id not in chat_sessions:
+                chat_sessions[chat_id] = client.chats.create(
+                    model='gemini-2.5-flash',
+                    config=types.GenerateContentConfig(
+                        system_instruction=full_system_instruction,
+                        temperature=0.75
+                    )
                 )
-            )
+
+            chat = chat_sessions[chat_id]
+            prompt = f"({profile['name']}): {user_text}"
+            response = chat.send_message(prompt)
 
             if response and response.text:
                 reply_text = response.text.strip()
                 break
         except Exception as e:
-            print(f"فشل الاتصال، جاري تحويل المفتاح... الخطأ: {e}")
+            print(f"تحديث الجلسة بسبب خطأ: {e}")
+            chat_sessions.pop(chat_id, None)
             switch_to_next_key()
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     stop_action = True
     action_task.cancel()
 
     if reply_text:
-        history.append({"role": "model", "parts": [{"text": reply_text}]})
         if wants_voice:
             await send_voice_response(update, context, reply_text)
         else:
