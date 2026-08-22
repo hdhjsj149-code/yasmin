@@ -2062,7 +2062,8 @@ async def clear_memory_command(
         return
 
 
-    clear_user_memory(
+    clear_user_meory(
+
         user.id,
         update.message.chat_id
     )
@@ -2673,99 +2674,75 @@ async def handle_message(
 
     ]:
 
-        group_msg_counters[
-            chat_id
-        ] += 1
+        
 
 
-        is_reply_to_bot = False
+group_msg_counters[chat_id] += 1
 
+is_reply_to_bot = False
 
-        if update.message.reply_to_message:
+if update.message.reply_to_message:
 
-            replied_user = (
+    replied_user = (
+        update.message
+        .reply_to_message
+        .from_user
+    )
 
-                update.message
-                .reply_to_message
-                .from_user
-            )
-
-
-            if replied_user:
-
-                is_reply_to_bot = (
-
-                    replied_user.id
-
-                    == context.bot.id
-                )
-
-
-        bot_username = (
-
-            context.bot.username
-
-            or
-
-            "Yasmin"
+    if replied_user:
+        is_reply_to_bot = (
+            replied_user.id == context.bot.id
         )
 
+bot_username = (
+    context.bot.username
+    or "Yasmin"
+)
 
-        has_trigger = (
+has_trigger = (
+    "ياسمين" in user_text
+    or
+    f"@{bot_username}".lower()
+    in user_text.lower()
+)
 
-            "ياسمين"
+# ========================================================
+# ظهور ياسمين تلقائياً من فترة لفترة
+# ========================================================
 
-            in user_text
+is_random_appearance = False
 
-            or
+if (
+    group_msg_counters[chat_id]
+    >= group_next_random_reply[chat_id]
+):
 
-            f"@{bot_username}".lower()
+    is_random_appearance = True
 
-            in user_text.lower()
-        )
+    # تصفير العداد
+    group_msg_counters[chat_id] = 0
 
+    # تحديد المرة القادمة بشكل عشوائي
+    group_next_random_reply[chat_id] = random.randint(
+        80,
+        150
+    )
 
-        is_100th = False
+# ========================================================
+# تحديد هل ياسمين ترد أم لا
+# ========================================================
 
+if not is_admin:
 
-        if (
+    if (
+        not is_reply_to_bot
+        and
+        not has_trigger
+        and
+        not is_random_appearance
+    ):
 
-            group_msg_counters[
-                chat_id
-            ] >= 100
-
-            and
-
-            len(user_text) > 3
-
-        ):
-
-            is_100th = True
-
-
-            group_msg_counters[
-                chat_id
-            ] = 0
-
-
-        # الأدمن يستطيع الكلام بدون Trigger
-        if not is_admin:
-
-            if (
-
-                not is_reply_to_bot
-
-                and
-
-                not has_trigger
-
-                and
-
-                not is_100th
-
-            ):
-
-                return
+        return
 
 
     # ========================================================
