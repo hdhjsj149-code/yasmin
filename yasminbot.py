@@ -44,7 +44,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # ID الباشمهندس أحمد
+ADMIN_ID = 7601281598  # الـ ID الخاص بالباشمهندس أحمد
 
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
@@ -57,7 +57,7 @@ OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), o
 
 user_memory = {}
 processed_messages = set()
-active_groups = set()  # تخزين الجروبات النشطة للإرسال العشوائي
+group_last_random_time = {}  # لتتبع وقت آخر رد عشوائي لكل جروب
 CHAT_LOG_FILE = "chat_history.txt"
 
 def save_chat_to_file(user_info, user_msg, bot_msg):
@@ -66,38 +66,6 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
             timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
             f.write(f"--- [{timestamp}] ---\nالمستخدم: {user_info}\nالرسالة: {user_msg}\nرد ياسمين: {bot_msg}\n\n")
     except: pass
-
-def get_unified_system_prompt(user_fullname, is_admin, group_context_info):
-    current_time_str = time.strftime('%I:%M %p')
-    user_identity = "الباشمهندس أحمد (مطوري وصانعي الرئيسي)" if is_admin else user_fullname
-    
-    return f"""أنتِ "ياسمين"، فتاة سودانية لطيفة وذكية وعفوية.
-صممك وبرمجك الباشمهندس أحمد فقط. ممنوع تماماً ذكر قوقل أو أي شركة أخرى كصانع لك.
-المستخدم الحالي هو: {user_identity}.
-الوقت الحالي: {current_time_str}.
-{group_context_info}
-
-شروط شخصيتك وطريقة كلامك الثابتة:
-1. اتكلمي بلهجة سودانية عامية عفوية ودافئة جداً (استخدمي كلمات مثل: يا زول، يا غالي، حبيبنا، أبشر، باسطة، آها، شنو).
-2. ردي بدقة وفهم كامل لرسالة المستخدم، وممنوع الرد بأجوبة عشوائية.
-3. ردي في سطر أو سطرين مكثفين بدون تطويل إلا لو طلب شرح مفصل."""
-
-def transcribe_audio_groq(audio_bytes):
-    if not GROQ_KEYS: return None
-    try:
-        key = random.choice(GROQ_KEYS)
-        url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {key}"}
-        files = {
-            'file': ('voice.ogg', io.BytesIO(audio_bytes), 'audio/ogg'),
-            'model': (None, 'whisper-large-v3-turbo'),
-            'language': (None, 'ar')
-        }
-        res = requests.post(url, headers=headers, files=files, timeout=12)
-        if res.status_code == 200:
-            return res.json().get('text', '').strip()
-    except: pass
-    return None
 
 def ask_groq(sys_prompt, user_msg):
     if not GROQ_KEYS: return None
@@ -111,39 +79,39 @@ def ask_groq(sys_prompt, user_msg):
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            "temperature": 0.7, 
-            "max_tokens": 200
+            "temperature": 0.8, 
+            "max_tokens": 150
         }
-        res = requests.post(url, json=data, headers=headers, timeout=10)
+        res = requests.post(url, json=data, headers=headers, timeout=6)
         if res.status_code == 200:
             res_json = res.json()
             if 'choices' in res_json and len(res_json['choices']) > 0: 
                 return res_json['choices'][0]['message']['content'].strip()
-    except: pass
-    return None
+        return None
+    except: return None
 
 def ask_openrouter(sys_prompt, user_msg):
     if not OPENROUTER_KEYS: return None
     try:
         key = random.choice(OPENROUTER_KEYS)
         url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "HTTP-Referer": "https://render.com", "X-Title": "YasminBot"}
         data = {
             "model": "meta-llama/llama-3.1-8b-instruct:free",
             "messages": [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}
             ],
-            "temperature": 0.7,
-            "max_tokens": 200
+            "temperature": 0.8,
+            "max_tokens": 150
         }
-        res = requests.post(url, json=data, headers=headers, timeout=10)
+        res = requests.post(url, json=data, headers=headers, timeout=6)
         if res.status_code == 200:
             res_json = res.json()
             if 'choices' in res_json and len(res_json['choices']) > 0: 
                 return res_json['choices'][0]['message']['content'].strip()
-    except: pass
-    return None
+        return None
+    except: return None
 
 def text_to_live_voice(text_data):
     try:
@@ -153,61 +121,8 @@ def text_to_live_voice(text_data):
         return voice_io
     except: return None
 
-# دالة توليد رد الذكاء الاصطناعي الموحدة
-def generate_ai_reply(sys_instruction, full_conversation_history):
-    reply_result = None
-    if GEMINI_KEYS:
-        shuffled_keys = list(GEMINI_KEYS)
-        random.shuffle(shuffled_keys)
-        for k in shuffled_keys:
-            try:
-                ai_client = genai.Client(api_key=k)
-                response = ai_client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=full_conversation_history,
-                    config=types.GenerateContentConfig(
-                        system_instruction=sys_instruction,
-                        temperature=0.7
-                    )
-                )
-                if response and hasattr(response, 'text') and response.text:
-                    reply_result = response.text.strip()
-                    break
-            except Exception: continue
-
-    if not reply_result: 
-        reply_result = ask_groq(sys_instruction, full_conversation_history)
-    if not reply_result: 
-        reply_result = ask_openrouter(sys_instruction, full_conversation_history)
-    
-    return reply_result
-
-# وظيفة الإرسال التلقائي العشوائي في الجروبات كل ساعة
-async def send_random_hourly_group_message(context: ContextTypes.DEFAULT_TYPE):
-    if not active_groups: return
-    
-    # اختيار جروب عشوائي من الجروبات المسجلة
-    target_group_id = random.choice(list(active_groups))
-    
-    prompts = [
-        "اكتبي رسالة تحية وافتقاد قصيرة جداً للجروب بلهجة سودانية عفوية.",
-        "اكتبي حكمة أو نصيحة سودانية خفيفة ولطيفة للناس في الجروب.",
-        "اسألي سؤال خفيف ولطيف للجروب للونسة (مثلاً عن القهوة أو الجو).",
-        "اكتبي تذكير بالصلاة على النبي أو ذكر خفيف بأسلوب سوداني لطيف."
-    ]
-    sys_instruction = get_unified_system_prompt("الجروب", False, "")
-    user_prompt = random.choice(prompts)
-    
-    ai_msg = generate_ai_reply(sys_instruction, user_prompt)
-    if ai_msg:
-        try:
-            await context.bot.send_message(chat_id=target_group_id, text=ai_msg)
-        except Exception:
-            # إذا أزيل البوت من الجروب يتم حذفه من القائمة
-            active_groups.discard(target_group_id)
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global user_memory, processed_messages, active_groups
+    global user_memory, processed_messages, group_last_random_time
     if not update.message or not update.message.message_id: return
 
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
@@ -221,7 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id if user else chat_id
     is_admin = (user_id == ADMIN_ID)
     
-    user_fullname = user.full_name if user else "مستخدم"
+    user_fullname = user.full_name if user else "مستخدم غير معروف"
     user_info = f"{user_fullname} (ID: {user_id}) [Chat: {chat_type}]"
 
     user_text = ""
@@ -229,12 +144,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.caption: user_text = update.message.caption.strip()
 
     group_context_info = ""
-    sender_role = "عضو"
+    sender_role = "عضو عادي"
 
-    # التعامل مع الجروبات
+    # إدارة الشروط داخل الجروبات
     if chat_type in ['group', 'supergroup']:
-        active_groups.add(chat_id)  # تسجيل الجروب للإرسال العشوائي الدوري
-        
         is_reply_to_bot = False
         if update.message.reply_to_message and update.message.reply_to_message.from_user:
             if update.message.reply_to_message.from_user.id == context.bot.id:
@@ -243,16 +156,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_username = context.bot.username or "Yasmin"
         has_trigger = ("ياسمين" in user_text) or (f"@{bot_username}" in user_text)
 
-        # عدم الرد في الجروب إلا إذا تم المناداة باسم ياسمين أو عمل Reply
-        if not is_reply_to_bot and not has_trigger:
+        # فحص شرط الرد العشوائي كل ساعة (3600 ثانية)
+        now = time.time()
+        last_time = group_last_random_time.get(chat_id, 0)
+        is_hourly_random_trigger = False
+
+        if (now - last_time) >= 3600 and user_text and len(user_text) > 3:
+            is_hourly_random_trigger = True
+            group_last_random_time[chat_id] = now  # تحديث وقت الرد العشوائي للجروب
+
+        # التجاوز الفوري إذا لم تنطبق الشروط
+        if not is_admin and not is_reply_to_bot and not has_trigger and not is_hourly_random_trigger:
             return
 
         try:
             chat_data = await context.bot.get_chat(chat_id)
-            group_name = chat_data.title or "الجروب"
+            group_name = chat_data.title or "غير معروف"
             admins = await context.bot.get_chat_administrators(chat_id)
             if any(a.user.id == user_id for a in admins if a.user):
-                sender_role = "مشرف"
+                sender_role = "مشرف (Admin) في المجموعة"
             group_context_info = f"\nاسم الجروب: {group_name}\nرتبة المستخدم: {sender_role}\n"
         except: pass
 
@@ -272,54 +194,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # معالجة الصوت
+    # معالجة التسجيلات الصوتية
     if is_incoming_voice:
-        voice_success = False
-        target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
-        file_id = target_msg.voice.file_id if target_msg.voice else target_msg.audio.file_id
-        tg_file = await context.bot.get_file(file_id)
-        voice_bytes = await tg_file.download_as_bytearray()
-
+        trans_success = False
         if GEMINI_KEYS:
-            shuffled_v_keys = list(GEMINI_KEYS)
-            random.shuffle(shuffled_v_keys)
-            for vk in shuffled_v_keys:
+            shuffled_k = list(GEMINI_KEYS)
+            random.shuffle(shuffled_k)
+            for k in shuffled_k:
                 try:
-                    ai_client = genai.Client(api_key=vk)
+                    target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
+                    file_id = target_msg.voice.file_id if target_msg.voice else target_msg.audio.file_id
+                    tg_file = await context.bot.get_file(file_id)
+                    voice_bytes = await tg_file.download_as_bytearray()
+                    
+                    ai_client = genai.Client(api_key=k)
                     audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
                     trans_response = ai_client.models.generate_content(
-                        model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
+                        model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي إضافة."]
                     )
                     if trans_response and trans_response.text:
                         user_text = trans_response.text.strip()
-                        voice_success = True
+                        trans_success = True
                         break
                 except: continue
-
-        if not voice_success:
-            groq_text = transcribe_audio_groq(bytes(voice_bytes))
-            if groq_text:
-                user_text = groq_text
-                voice_success = True
-
-        if not voice_success:
-            await update.message.reply_text("يا حبيبنا الصوت ما وضح معاي شديد، حاول كرر الريكورد أو اكتبه كتابة! 🌸")
+        
+        if not trans_success:
+            await update.message.reply_text("ما قدرت أسمع الريكورد كويس، اكتب لي كلامك كتابة يا حبيبنا! ✨")
             return
 
-    # أسئلة الهوية السريعة
-    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو']
+    # مستشعر المطور والـ Auto Replies المباشرة
+    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو', 'المطورك منو', 'المبرمجك منو']
     if any(trig in user_text.lower() for trig in creator_triggers):
         reply = 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
         save_chat_to_file(user_info, user_text, reply)
         await update.message.reply_text(reply)
         return
 
-    who_am_i_triggers = ['انا منو', 'أنـا منو', 'أنا منو', 'بتعرفني منو']
-    if any(trig in user_text.lower() for trig in who_am_i_triggers):
-        if is_admin:
-            reply = 'إنت الباشمهندس أحمد، مطوري وسيدي وعاسي! 😎🔥'
-        else:
-            reply = f'إنت {user_fullname} المنورنا في المحادثة! 🌸✨'
+    auto_replies = {
+        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
+        'الخبر شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'الخبر شنو؟': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'منور': 'النور نورك والله يا حبيبنا! 🌟',
+        'كيفك': 'الحمد لله طالما إنت بخير، أمورنا باسطة! ✨',
+        'تمام': 'دائماً تمام يا رب، علك طيب؟ 🌸'
+    }
+
+    if user_text in auto_replies:
+        reply = auto_replies[user_text]
         save_chat_to_file(user_info, user_text, reply)
         await update.message.reply_text(reply)
         return
@@ -330,17 +251,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_memory: user_memory[user_id] = []
 
-    sys_instruction = get_unified_system_prompt(user_fullname, is_admin, group_context_info)
+    current_time_str = time.strftime('%I:%M %p')
 
-    full_conversation_history = "سجل المحادثة السابق:\n"
+    provocation_keywords = [
+        'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
+        'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
+        'يا وهم', 'وهمية', 'وهميه', 'سجمك', 'رمادك', 'قليلة ادب', 'قليلة أدب', 'بلا يخمك', 'طيري'
+    ]
+    is_provoked = any(word in user_text.lower() for word in provocation_keywords)
+    is_religious = any(w in user_text.lower() for w in ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'حديث', 'فقه', 'فتوى', 'دين', 'إسلام', 'صلاة', 'حلال', 'حرام'])
+    is_long_query = len(user_text) > 40 or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى'])
+
+    identity_rule = "أنتِ اسمك ياسمين، صممك وبرمجك الباشمهندس أحمد فقط. ممنوع تماماً ذكر قوقل كصانع لك."
+
+    if is_religious:
+        sys_instruction = f"{identity_rule}\nأنتِ ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى بدون إيموجي في سطرين."
+    elif is_provoked:
+        if is_admin:
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، ردي بلهجة سودانية فيها عتاب رقيق وزعل خفيف في سطر واحد."
+        else:
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. كوني قوية الشخصية وناشفة. ردي بلهجة سودانية صارمة دون شتائم في سطر واحد."
+    elif is_long_query:
+        if is_admin:
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين. ردي على أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
+        else:
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. أجيبي على المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد. {group_context_info}"
+    else:
+        if is_admin:
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين سودانية عفوية. ردي على أحمد بلهجة سودانية دافئة وتلقائية في سطر واحد. {group_context_info}"
+        else:
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين سودانية لطيفة. ردي بلهجة سودانية خفيفة وونسة عفوية وتجاوبي مع رسالة المستخدم في سطر واحد. {group_context_info}"
+
+    full_conversation_history = "الونسة السابقة:\n"
     for msg in user_memory[user_id]: full_conversation_history += f"{msg}\n"
     full_conversation_history += f"المستخدم: {user_text}\nياسمين:"
 
-    # توليد الرد من الذكاء الاصطناعي
-    reply_result = generate_ai_reply(sys_instruction, full_conversation_history)
+    reply_result = None
 
+    # تجربة Gemini
+    if GEMINI_KEYS:
+        shuffled_keys = list(GEMINI_KEYS)
+        random.shuffle(shuffled_keys)
+        for k in shuffled_keys:
+            try:
+                ai_client = genai.Client(api_key=k)
+                response = ai_client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=full_conversation_history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=sys_instruction,
+                        temperature=0.8
+                    )
+                )
+                if response and hasattr(response, 'text') and response.text:
+                    reply_result = response.text.strip()
+                    break
+            except: continue
+
+    # التجربة البديلة: Groq ثم OpenRouter
+    if not reply_result: 
+        reply_result = ask_groq(sys_instruction, full_conversation_history)
+    if not reply_result: 
+        reply_result = ask_openrouter(sys_instruction, full_conversation_history)
+
+    # الرد التلقائي المتنوع بدلاً من جملة واحدة مكررة
     if not reply_result:
-        reply_result = "أبشر يا غالي، معاك ياسمين وسامعاك كويس جداً! قول لي حابب نعمل شنو؟ ✨"
+        dynamic_fallbacks = [
+            f"يا هلا يا {user_fullname}، معاك ياسمين! كيف أقدر أساعدك؟ ✨",
+            "هلا والله! حبابك، أها قولي لي الحاصل شنو؟ 🌸",
+            "أبشر يا غالي، معاك ياسمين وسامعاك كويس، قولي لي حابب نعمل شنو؟ 😉",
+            "يا مية مرحب! آمرني يا باشا عيوني ليك 🌟"
+        ]
+        reply_result = random.choice(dynamic_fallbacks)
 
     user_memory[user_id].append(f"المستخدم: {user_text}")
     user_memory[user_id].append(f"ياسمين: {reply_result}")
@@ -361,10 +343,5 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
-    
-    # جدولة دالة الإرسال التلقائي كل 3600 ثانية (كل ساعة)
-    if app.job_queue:
-        app.job_queue.run_repeating(send_random_hourly_group_message, interval=3600, first=60)
-        
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
