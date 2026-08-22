@@ -241,7 +241,7 @@ def ask_gemini(sys_prompt, conversation_history):
             )
 
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.6-flash",
                 contents=conversation_history,
                 config=config
             )
@@ -820,7 +820,7 @@ async def handle_message(
 
                     trans_response = (
                         client.models.generate_content(
-                            model="gemini-2.0-flash",
+                            model="gemini-3.6-flash",
                             contents=[
                                 audio_part,
                                 (
