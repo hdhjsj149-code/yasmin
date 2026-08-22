@@ -1,4 +1,3 @@
-pyTelegramBotAPI
 python-telegram-bot
 google-genai
 requests
