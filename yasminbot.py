@@ -6,6 +6,7 @@ import random
 import io
 import zipfile
 import socket
+import asyncio
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -56,6 +57,7 @@ GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.ge
 OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2')] if k]
 
 user_memory = {}
+active_groups = set()  # لتخزين الجروبات النشطة للرد العشوائي
 processed_messages = set()
 CHAT_LOG_FILE = "chat_history.txt"
 
@@ -110,8 +112,39 @@ def text_to_live_voice(text_data):
         return voice_io
     except: return None
 
+# --- [دالة الرد العشوائي كل ساعة في الجروبات] ---
+async def scheduled_random_message(app):
+    while True:
+        await asyncio.sleep(3600)  # انتظار 60 دقيقة (ساعة كاملة)
+        for chat_id in list(active_groups):
+            try:
+                random_prompts = [
+                    "أرسلي كلمة حنينة وونسة خفيفة للجروب تعبر عن شوقك للناس هنا في سطر واحد بلهجة سودانية.",
+                    "اطرحي سؤال خفيف ومسلّي للجروب عشان ينشطوا والناس تتونس.",
+                    "سلمي على ناس الجروب وقولي ليهم الحاصل شنو يا شباب؟"
+                ]
+                sys_inst = "أنتِ ياسمين. اكتبي رسالة واحدة قصيرة ولطيفة جداً للجروب بلهجة سودانية وبدون تصنع."
+                prompt = random.choice(random_prompts)
+                
+                reply = None
+                if GEMINI_KEYS:
+                    try:
+                        ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
+                        res = ai_client.models.generate_content(
+                            model='gemini-2.5-flash', contents=prompt,
+                            config=types.GenerateContentConfig(system_instruction=sys_inst)
+                        )
+                        if res and res.text: reply = res.text.strip()
+                    except: pass
+                
+                if not reply: reply = ask_groq(f"{sys_inst}\n{prompt}")
+                if reply:
+                    await app.bot.send_message(chat_id=chat_id, text=reply)
+            except Exception as e:
+                print(f"خطأ في الرد الدوري: {e}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global user_memory, processed_messages
+    global user_memory, processed_messages, active_groups
     if not update.message or not update.message.message_id: return
 
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
@@ -136,6 +169,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_role = "عضو عادي"
 
     if chat_type in ['group', 'supergroup']:
+        active_groups.add(chat_id)
         is_reply_to_bot = False
         if update.message.reply_to_message and update.message.reply_to_message.from_user:
             if update.message.reply_to_message.from_user.id == context.bot.id:
@@ -144,31 +178,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_username = context.bot.username or "Yasmin"
         has_trigger = ("ياسمين" in user_text) or (f"@{bot_username}" in user_text)
 
+        # عدم الرد المباشر إلا إذا تم المنشن أو الرد أو بواسطة المالك أحمد
         if not is_admin and not is_reply_to_bot and not has_trigger:
             return
 
         try:
             chat_data = await context.bot.get_chat(chat_id)
             group_name = chat_data.title or "غير معروف"
-            group_description = chat_data.description or "لا يوجد وصف محدد"
             admins = await context.bot.get_chat_administrators(chat_id)
-            admin_names = [f"{a.user.full_name} (ID: {a.user.id})" for a in admins if a.user]
             
             if any(a.user.id == user_id for a in admins if a.user):
-                sender_role = "مشرف (Admin) في المجموعة"
+                sender_role = "مشرف (Admin) محترم في المجموعة"
             
-            pinned_msg = chat_data.pinned_message.text if chat_data.pinned_message else "لم يتم تثبيت قوانين محددة بعد"
-
             group_context_info = (
-                f"\n--- معلومات المجموعة الحالية ---\n"
-                f"اسم الجروب الحالي: {group_name}\n"
-                f"وصف الجروب (حق شنو): {group_description}\n"
-                f"قائمة المشرفين الحالية: {', '.join(admin_names)}\n"
-                f"الرسالة المثبتة وقوانين الجروب: {pinned_msg}\n"
-                f"رتبة المستخدم الحالي الذي يتحدث معك: {sender_role}\n"
+                f"\n--- معلومات المجموعة ---\n"
+                f"اسم الجروب: {group_name}\n"
+                f"رتبة الشخص البتكلم معاك: {sender_role}\n"
             )
         except:
-            group_context_info = "\n(فشل في جلب بعض بيانات المجموعة بسبب الصلاحيات)\n"
+            group_context_info = "\n(معلومات الجروب العادية)\n"
 
     if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
         if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
@@ -289,7 +317,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # المحاولة بـ Gemini باستخدام system_instruction المخصص
     if GEMINI_KEYS:
         for _ in range(len(GEMINI_KEYS)):
             try:
@@ -310,7 +337,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"[Gemini Error]: {e}")
                 continue
 
-    # Fallback إضافي ومباشر في حال عدم توفر Gemini أو فشله
     combined_prompt = f"{sys_instruction}\n\n{full_conversation_history}"
     if not reply_result: reply_result = ask_groq(combined_prompt)
     if not reply_result: reply_result = ask_openrouter(combined_prompt)
@@ -335,7 +361,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
 
+async def post_init(app):
+    # تشغيل الرد العشوائي الدوري في الخلفية
+    asyncio.create_task(scheduled_random_message(app))
+
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).post_init(post_init).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
