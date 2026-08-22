@@ -9,9 +9,7 @@ import socket
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
-# ---------------------------------------------------------
-# 1. السيرفر الوهمي والـ Keep-Alive لتفادي إغلاق Render
-# ---------------------------------------------------------
+# 1. السيرفر الوهمي للـ Keep-Alive
 def is_port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
@@ -32,8 +30,7 @@ def run_dummy_server():
         if is_port_in_use(port):
             return
         class QuietHandler(SimpleHTTPRequestHandler):
-            def log_message(self, format, *args):
-                return
+            def log_message(self, format, *args): return
         TCPServer.allow_reuse_address = True
         with TCPServer(("", port), QuietHandler) as httpd:
             httpd.serve_forever()
@@ -43,13 +40,12 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# ---------------------------------------------------------
-# 2. الاستيرادات وتجهيز المتغيرات
-# ---------------------------------------------------------
+# 2. المكتبات والمتغيرات
 try:
     from gTTS import gTTS
     HAS_GTTS = True
-except ImportError:
+except Exception as e:
+    print(f"[WARNING] gTTS Import Failed: {e}")
     HAS_GTTS = False
 
 from google import genai
@@ -59,9 +55,9 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # ID الباشمهندس أحمد
+ADMIN_ID = 7601281598
 
-# 8 مفاتيح Gemini
+# جمع المفاتيح وتنظيفها
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3'), os.environ.get('GEMINI_API_KEY'),
@@ -70,16 +66,8 @@ RAW_GEMINI_KEYS = [
 ]
 GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 
-# 2 مفاتيح Groq
-GROQ_KEYS = [k.strip() for k in [
-    os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')
-] if k]
-
-# 4 مفاتيح OpenRouter
-OPENROUTER_KEYS = [k.strip() for k in [
-    os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2'),
-    os.environ.get('OPENROUTER_API_KEY_3'), os.environ.get('OPENROUTER_API_KEY_4')
-] if k]
+GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')] if k and len(k.strip()) > 5]
+OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2'), os.environ.get('OPENROUTER_API_KEY_3'), os.environ.get('OPENROUTER_API_KEY_4')] if k and len(k.strip()) > 5]
 
 user_memory = {}
 processed_messages = set()
@@ -95,10 +83,11 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
         pass
 
 # ---------------------------------------------------------
-# 3. محركات الـ AI الاحتياطية
+# 3. محركات الـ AI الاحتياطية المحدثة
 # ---------------------------------------------------------
 def ask_groq(sys_prompt, user_msg):
     if not GROQ_KEYS:
+        print("[GROQ] No API keys found in Environment Variables!")
         return None
     shuffled = list(GROQ_KEYS)
     random.shuffle(shuffled)
@@ -107,77 +96,82 @@ def ask_groq(sys_prompt, user_msg):
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
             data = {
-                "model": "llama-3.1-8b-instant", 
+                "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_msg}
                 ],
-                "temperature": 0.8, 
-                "max_tokens": 150
+                "temperature": 0.7,
+                "max_tokens": 200
             }
-            res = requests.post(url, json=data, headers=headers, timeout=6)
+            res = requests.post(url, json=data, headers=headers, timeout=8)
             if res.status_code == 200:
-                res_json = res.json()
-                if 'choices' in res_json and len(res_json['choices']) > 0: 
-                    return res_json['choices'][0]['message']['content'].strip()
+                print("[GROQ SUCCESS] Responded successfully.")
+                return res.json()['choices'][0]['message']['content'].strip()
+            else:
+                print(f"[GROQ ERROR] Status Code: {res.status_code}, Response: {res.text}")
         except Exception as e:
-            print(f"[GROQ Error]: {e}")
+            print(f"[GROQ EXCEPTION]: {e}")
             continue
     return None
 
 def ask_openrouter(sys_prompt, user_msg):
     if not OPENROUTER_KEYS:
+        print("[OPENROUTER] No API keys found in Environment Variables!")
         return None
     shuffled = list(OPENROUTER_KEYS)
     random.shuffle(shuffled)
     for key in shuffled:
         try:
             url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://render.com",
+                "X-Title": "YasminBot"
+            }
             data = {
-                "model": "meta-llama/llama-3.1-8b-instruct:free",
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
                 "messages": [
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_msg}
                 ],
-                "temperature": 0.8,
-                "max_tokens": 150
+                "temperature": 0.7,
+                "max_tokens": 200
             }
-            res = requests.post(url, json=data, headers=headers, timeout=6)
+            res = requests.post(url, json=data, headers=headers, timeout=8)
             if res.status_code == 200:
-                res_json = res.json()
-                if 'choices' in res_json and len(res_json['choices']) > 0: 
-                    return res_json['choices'][0]['message']['content'].strip()
+                print("[OPENROUTER SUCCESS] Responded successfully.")
+                return res.json()['choices'][0]['message']['content'].strip()
+            else:
+                print(f"[OPENROUTER ERROR] Status Code: {res.status_code}, Response: {res.text}")
         except Exception as e:
-            print(f"[OPENROUTER Error]: {e}")
+            print(f"[OPENROUTER EXCEPTION]: {e}")
             continue
     return None
 
 def text_to_live_voice(text_data):
-    if not HAS_GTTS:
-        return None
+    if not HAS_GTTS: return None
     try:
         tts = gTTS(text=text_data, lang='ar', slow=False)
         voice_io = io.BytesIO()
         tts.write_to_fp(voice_io)
         return voice_io
-    except Exception:
+    except Exception as e:
+        print(f"[GTTS ERROR]: {e}")
         return None
 
 # ---------------------------------------------------------
-# 4. معالج الرسائل الرئيسي
+# 4. معالج الرسائل
 # ---------------------------------------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_memory, processed_messages, group_msg_counters
-    if not update.message or not update.message.message_id:
-        return
+    if not update.message or not update.message.message_id: return
 
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
-    if msg_unique_id in processed_messages:
-        return
+    if msg_unique_id in processed_messages: return
     processed_messages.add(msg_unique_id)
-    if len(processed_messages) > 400:
-        processed_messages.clear()
+    if len(processed_messages) > 400: processed_messages.clear()
 
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type 
@@ -188,41 +182,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_fullname = user.full_name if user else "مستخدم"
     user_info = f"{user_fullname} (ID: {user_id}) [{chat_type}]"
 
-    user_text = ""
-    if update.message.text:
-        user_text = update.message.text.strip()
-    elif update.message.caption:
-        user_text = update.message.caption.strip()
-
-    group_context_info = ""
-    is_group_admin = False
+    user_text = update.message.text.strip() if update.message.text else (update.message.caption.strip() if update.message.caption else "")
 
     if chat_type in ['group', 'supergroup']:
         group_msg_counters[chat_id] = group_msg_counters.get(chat_id, 0) + 1
-
-        is_reply_to_bot = False
-        if update.message.reply_to_message and update.message.reply_to_message.from_user:
-            if update.message.reply_to_message.from_user.id == context.bot.id:
-                is_reply_to_bot = True
-
+        is_reply_to_bot = bool(update.message.reply_to_message and update.message.reply_to_message.from_user and update.message.reply_to_message.from_user.id == context.bot.id)
         bot_username = context.bot.username or "Yasmin"
         has_trigger = ("ياسمين" in user_text) or (f"@{bot_username}" in user_text)
-
-        is_100th_msg_trigger = False
-        if group_msg_counters[chat_id] >= 100 and user_text and len(user_text) > 3:
-            is_100th_msg_trigger = True
+        is_100th = False
+        if group_msg_counters[chat_id] >= 100 and len(user_text) > 3:
+            is_100th = True
             group_msg_counters[chat_id] = 0
 
-        if not is_admin and not is_reply_to_bot and not has_trigger and not is_100th_msg_trigger:
+        if not is_admin and not is_reply_to_bot and not has_trigger and not is_100th:
             return
-
-        try:
-            admins = await context.bot.get_chat_administrators(chat_id)
-            if any(a.user.id == user_id for a in admins if a.user):
-                is_group_admin = True
-            group_context_info = f"\nالمحادثة: جروب\nصفة المستخدم: {'مشرف (Admin)' if is_group_admin else 'عضو'}"
-        except Exception:
-            pass
 
     if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
         if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
@@ -236,12 +209,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     is_incoming_voice = bool(update.message.voice or update.message.audio)
-    if not user_text and not is_incoming_voice:
-        return
+    if not user_text and not is_incoming_voice: return
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # تحويل الصوت إلى نص
+    # تحويل الصوت لـ نص
     if is_incoming_voice:
         trans_success = False
         if GEMINI_KEYS:
@@ -267,129 +239,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     print(f"[STT Error]: {e}")
                     continue
-        
         if not trans_success:
             await update.message.reply_text("ما قدرت أسمع الريكورد كويس، اكتب لي كتابة يا حبيبنا! ✨")
             return
 
-    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو', 'المطورك منو', 'المبرمجك منو']
-    if any(trig in user_text.lower() for trig in creator_triggers):
-        reply = 'صنعني وبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
-        save_chat_to_file(user_info, user_text, reply)
-        await update.message.reply_text(reply)
-        return
+    identity_rule = "اسمكِ ياسمين، أنتِ فتاة سودانية ذكية وعفوية. برمجكِ وصنعكِ الباشمهندس أحمد فقط."
+    sys_instruction = f"{identity_rule}\n أجيبي بلهجة سودانية لطيفة ومباشرة وتجاوبي مع الرسالة."
 
-    is_voice_intent = is_incoming_voice
-    if user_text and any(vt in user_text.lower() for vt in ['ريكورد', 'فويس', 'صوت', 'اشرحي']):
-        is_voice_intent = True
-
-    if user_id not in user_memory:
-        user_memory[user_id] = []
-
-    current_time_str = time.strftime('%I:%M %p')
-
-    provocation_keywords = [
-        'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
-        'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
-        'يا وهم', 'وهمية', 'وهميه', 'سجمك', 'رمادك', 'قليلة ادب', 'قليلة أدب', 'بلا يخمك', 'طيري'
-    ]
-    is_provoked = any(word in user_text.lower() for word in provocation_keywords)
-    mentions_ahmed = any(w in user_text.lower() for w in ['احمد', 'أحمد', 'المطور', 'المبرمج'])
-    is_religious = any(w in user_text.lower() for w in ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'حديث', 'فقه', 'فتوى', 'دين', 'إسلام', 'صلاة', 'حلال', 'حرام'])
-    is_long_query = len(user_text) > 40 or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى'])
-
-    identity_rule = (
-        "اسمكِ ياسمين، أنتِ فتاة سودانية ذكية وعفوية. "
-        "برمجكِ وصنعكِ الباشمهندس أحمد فقط، يمنع منعاً باتاً ذكر قوقل أو غيرها كصانع لكِ. "
-        "دافعي عن الباشمهندس أحمد بصرامة وافتخار لو أسيء له. "
-        "ودافعي عن نفسك بلهجة سودانية حادة وقوية لو حاول أحدهم الإساءة لكِ، وتعاملي باحترام مع المشرفين (Admins)."
-    )
-
-    if is_religious:
-        sys_instruction = f"{identity_rule}\nردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى بدون إيموجي في سطرين."
-    elif is_provoked and mentions_ahmed:
-        sys_instruction = f"{identity_rule}\nالمستخدم يسيء للباشمهندس أحمد! ردي عليه بلهجة سودانية حادة جداً ودافعي عن أحمد ووقفي المستخدم عند حده في سطرين."
-    elif is_provoked:
-        if is_admin:
-            sys_instruction = f"{identity_rule}\nالباشمهندس أحمد كتب عتاباً، ردي عليه بلهجة سودانية فيها عتاب رقيق ودلع خفيف في سطر واحد."
-        else:
-            sys_instruction = f"{identity_rule}\nالمستخدم يسيء لكِ! ردي بلهجة سودانية حازمة وناشفة ودافعي عن نفسك بصرامة بدون شتائم في سطر واحد."
-    elif is_long_query:
-        if is_admin:
-            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
-        else:
-            sys_instruction = f"{identity_rule}\nأجيبي على المستخدم بلهجة سودانية مبسطة وبأسلوب ذكي ومختصر ومفيد. {group_context_info}"
-    else:
-        if is_admin:
-            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على الباشمهندس أحمد بلهجة سودانية دافئة وتلقائية ومحترمة في سطر واحد. {group_context_info}"
-        elif is_group_admin:
-            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على مشرف الجروب باحترام ولهجة سودانية لطيفة وراقية في سطر واحد. {group_context_info}"
-        else:
-            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي بلهجة سودانية خفيفة وونسة عفوية وتجاوبي مع الرسالة في سطر واحد. {group_context_info}"
-
-    full_conversation_history = "سجل المحادثة:\n"
-    for msg in user_memory[user_id]:
-        full_conversation_history += f"{msg}\n"
-    full_conversation_history += f"المستخدم: {user_text}\nياسمين:"
+    if user_id not in user_memory: user_memory[user_id] = []
+    user_memory[user_id].append(f"المستخدم: {user_text}")
+    
+    full_prompt = f"التعليمات: {sys_instruction}\n" + "\n".join(user_memory[user_id][-5:])
 
     reply_result = None
 
-    # 1. Gemini الخيار الأول المضمون
+    # 1. التجربة الأولى: Gemini
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
         for k in shuffled_keys:
             try:
                 client = genai.Client(api_key=k)
-                # استخدام توليد بسيط يلغي تحذير الـ AFC
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=full_conversation_history,
-                    config=types.GenerateContentConfig(
-                        system_instruction=sys_instruction,
-                        temperature=0.8,
-                        tools=[] # تعطيل الأدوات لمنع تحذير AFC
-                    )
+                    contents=full_prompt
                 )
                 if response and hasattr(response, 'text') and response.text:
                     reply_result = response.text.strip()
+                    print("[GEMINI SUCCESS] Responded successfully.")
                     break
             except Exception as e:
-                print(f"[GEMINI Key Failed]: {e}")
+                print(f"[GEMINI KEY FAILED]: {e}")
                 continue
 
-    # 2. Groq الاحتياطي الأول
+    # 2. التجربة الثانية: Groq (إذا فشل جيمناي)
     if not reply_result:
-        reply_result = ask_groq(sys_instruction, full_conversation_history)
+        print("[FALLBACK] Gemini failed. Trying Groq...")
+        reply_result = ask_groq(sys_instruction, user_text)
 
-    # 3. OpenRouter الاحتياطي الثاني
+    # 3. التجربة الثالثة: OpenRouter (إذا فشل جيمناي و Groq)
     if not reply_result:
-        reply_result = ask_openrouter(sys_instruction, full_conversation_history)
+        print("[FALLBACK] Groq failed. Trying OpenRouter...")
+        reply_result = ask_openrouter(sys_instruction, user_text)
 
+    # الرسالة الأخيرة إذا فشل الكل
     if not reply_result:
         reply_result = "يا حبيبنا سامعاك، لكن في ضغط شبكة بسيط حالياً، أرسل لي تاني! ✨"
 
-    user_memory[user_id].append(f"المستخدم: {user_text}")
     user_memory[user_id].append(f"ياسمين: {reply_result}")
-    if len(user_memory[user_id]) > 6:
-        user_memory[user_id] = user_memory[user_id][-6:]
-
     save_chat_to_file(user_info, user_text, reply_result)
 
-    if is_voice_intent:
+    if is_incoming_voice or any(vt in user_text.lower() for vt in ['ريكورد', 'فويس', 'صوت']):
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         voice_io = text_to_live_voice(reply_result)
         if voice_io:
             voice_io.seek(0)
-            caption_text = "تفضل يا باشمهندس أحمد 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
-            await update.message.reply_voice(voice=voice_io, caption=caption_text)
+            await update.message.reply_voice(voice=voice_io, caption="تفضل الرد الصوتي.. 😉🎧")
             return
 
     await update.message.reply_text(reply_result)
 
-# ---------------------------------------------------------
-# 5. تشغيل البوت
-# ---------------------------------------------------------
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
     app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
