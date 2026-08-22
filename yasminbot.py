@@ -1,171 +1,341 @@
 import os
 import threading
-import asyncio
-from io import BytesIO
-from gtts import gTTS
+import time
+import requests
+import random
+import io
+import zipfile
+import socket
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def keep_alive_ping():
+    time.sleep(300)
+    while True:
+        try:
+            port = os.environ.get("PORT", "8080")
+            requests.get(f"http://127.0.0.1:{port}/", timeout=10)
+        except: pass
+        time.sleep(600)
+
 def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    class QuietHandler(SimpleHTTPRequestHandler):
-        def log_message(self, format, *args): return
-    with TCPServer(("", port), QuietHandler) as httpd:
-        httpd.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 8080))
+        if is_port_in_use(port): return
+        class QuietHandler(SimpleHTTPRequestHandler):
+            def log_message(self, format, *args): return
+        TCPServer.allow_reuse_address = True
+        with TCPServer(("", port), QuietHandler) as httpd:
+            httpd.serve_forever()
+    except: pass
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
+threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-import os
+from gtts import gTTS  
 from google import genai
 from google.genai import types
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-# 1. سحب مفاتيح الاتصال بأمان من السيرفر السحابي (Render) 🔒
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بك يا أحمد
 
-# تحديد الـ Admin ID الخاص بأحمد
-ADMIN_ID = 7601281598
+RAW_GEMINI_KEYS = [
+    os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
+    os.environ.get('GEMINI_API_KEY_3'), os.environ.get('GEMINI_API_KEY')
+]
+GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 
-# 2. تشغيل عميل جوجل جيميناي بالمكتبة الحديثة ✅
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')] if k]
+OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2')] if k]
 
-# دالة إرسال الرد الصوتي
-async def send_voice_response(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+user_memory = {}
+processed_messages = set()
+CHAT_LOG_FILE = "chat_history.txt"
+
+def save_chat_to_file(user_info, user_msg, bot_msg):
     try:
-        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.RECORD_VOICE)
-        tts = gTTS(text=text, lang='ar', slow=False)
-        voice_io = BytesIO()
-        tts.write_to_fp(voice_io)
-        voice_io.seek(0)
-        await update.message.reply_voice(voice=voice_io)
-    except Exception as e:
-        print(f"خطأ في إرسال الصوت: {e}")
-        await update.message.reply_text(text)
+        with open(CHAT_LOG_FILE, "a", encoding="utf-8") as f:
+            timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"--- [{timestamp}] ---\nالمستخدم: {user_info}\nالرسالة: {user_msg}\nرد ياسمين: {bot_msg}\n\n")
+    except: pass
 
-# 3. دالة استقبال ومعالجة الرسائل
+def ask_groq(prompt):
+    if not GROQ_KEYS: return None
+    try:
+        key = random.choice(GROQ_KEYS)
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        data = {
+            "model": "llama-3.1-8b-instant", 
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8, 
+            "max_tokens": 150
+        }
+        res = requests.post(url, json=data, headers=headers, timeout=12)
+        res_json = res.json()
+        if 'choices' in res_json: return res_json['choices'][0]['message']['content'].strip()
+        return None
+    except: return None
+
+def ask_openrouter(prompt):
+    if not OPENROUTER_KEYS: return None
+    try:
+        key = random.choice(OPENROUTER_KEYS)
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "HTTP-Referer": "https://render.com", "X-Title": "YasminBot"}
+        data = {
+            "model": "meta-llama/llama-3.1-8b-instruct:free",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,
+            "max_tokens": 150
+        }
+        res = requests.post(url, json=data, headers=headers, timeout=12)
+        res_json = res.json()
+        if 'choices' in res_json: return res_json['choices'][0]['message']['content'].strip()
+        return None
+    except: return None
+
+def text_to_live_voice(text_data):
+    try:
+        tts = gTTS(text=text_data, lang='ar', slow=False)
+        voice_io = io.BytesIO()
+        tts.write_to_fp(voice_io)
+        return voice_io
+    except: return None
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-        
-    user_text = update.message.text.strip()
+    global user_memory, processed_messages
+    if not update.message or not update.message.message_id: return
+
+    msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
+    if msg_unique_id in processed_messages: return
+    processed_messages.add(msg_unique_id)
+    if len(processed_messages) > 300: processed_messages.clear()
+
     chat_id = update.message.chat_id
-    chat_type = update.message.chat.type
-    bot_username = context.bot.username or "Yasmin"
-    
+    chat_type = update.message.chat.type 
     user = update.message.from_user
     user_id = user.id if user else chat_id
-    first_name = user.first_name if user else "صديق"
+    is_admin = (user_id == ADMIN_ID)
     
-    is_owner = (user_id == ADMIN_ID)
-    is_group = chat_type in ['group', 'supergroup']
-    
-    # فحص إذا المستخدم أدمن في الجروب
-    is_admin_user = is_owner
-    if is_group and not is_owner:
+    user_fullname = user.full_name if user else "مستخدم غير معروف"
+    user_info = f"{user_fullname} (ID: {user_id}) [Chat: {chat_type}]"
+
+    user_text = ""
+    if update.message.text: user_text = update.message.text.strip()
+    elif update.message.caption: user_text = update.message.caption.strip()
+
+    group_context_info = ""
+    sender_role = "عضو عادي"
+
+    if chat_type in ['group', 'supergroup']:
+        is_reply_to_bot = False
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            if update.message.reply_to_message.from_user.id == context.bot.id:
+                is_reply_to_bot = True
+        
+        bot_username = context.bot.username or "Yasmin"
+        has_trigger = ("ياسمين" in user_text) or (f"@{bot_username}" in user_text)
+
+        if not is_admin and not is_reply_to_bot and not has_trigger:
+            return
+
         try:
+            chat_data = await context.bot.get_chat(chat_id)
+            group_name = chat_data.title or "غير معروف"
+            group_description = chat_data.description or "لا يوجد وصف محدد"
             admins = await context.bot.get_chat_administrators(chat_id)
-            is_admin_user = any(a.user.id == user_id for a in admins if a.user and not a.user.is_bot)
-        except Exception:
-            is_admin_user = False
+            admin_names = [f"{a.user.full_name} (ID: {a.user.id})" for a in admins if a.user]
+            
+            if any(a.user.id == user_id for a in admins if a.user):
+                sender_role = "مشرف (Admin) في المجموعة"
+            
+            pinned_msg = chat_data.pinned_message.text if chat_data.pinned_message else "لم يتم تثبيت قوانين محددة بعد"
 
-    user_name = "أحمد" if is_owner else first_name
+            group_context_info = (
+                f"\n--- معلومات المجموعة الحالية ---\n"
+                f"اسم الجروب الحالي: {group_name}\n"
+                f"وصف الجروب (حق شنو): {group_description}\n"
+                f"قائمة المشرفين الحالية: {', '.join(admin_names)}\n"
+                f"الرسالة المثبتة وقوانين الجروب: {pinned_msg}\n"
+                f"رتبة المستخدم الحالي الذي يتحدث معك: {sender_role}\n"
+            )
+        except:
+            group_context_info = "\n(فشل في جلب بعض بيانات المجموعة بسبب الصلاحيات)\n"
 
-    # === [أولاً: لستة الردود التلقائية الثابتة] ===
+    if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
+        if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
+            zip_io = io.BytesIO()
+            with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                zip_file.write(CHAT_LOG_FILE, arcname="chat_history.txt")
+            zip_io.seek(0)
+            await context.bot.send_document(chat_id=chat_id, document=zip_io, filename="history.zip", caption="سجل الونسة كامل ومضغوط.. 📂📁")
+        else:
+            await update.message.reply_text("السجل فاضي لسه! ✨")
+        return
+
+    is_incoming_voice = bool(update.message.voice or update.message.audio)
+    if not user_text and not is_incoming_voice: return
+
+    is_long_query = len(user_text) > 40
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    if is_incoming_voice and GEMINI_KEYS:
+        try:
+            target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
+            file_id = target_msg.voice.file_id if target_msg.voice else target_msg.audio.file_id
+            tg_file = await context.bot.get_file(file_id)
+            voice_bytes = await tg_file.download_as_bytearray()
+            
+            ai_client = genai.Client(api_key=random.choice(GEMINI_KEYS))
+            audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
+            trans_response = ai_client.models.generate_content(
+                model='gemini-2.5-flash', contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي زيادة."]
+            )
+            if trans_response.text:
+                user_text = trans_response.text.strip()
+                is_long_query = True
+        except: pass
+
     auto_replies = {
-        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹✨',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨😉',
-        'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
-        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
-        'منور': 'النور نورك والله يا حبيبنا! 🌟✨',
-        'وين انت': 'لو مهتم كان عرفته 😎',
-        'وين مختفي': 'لو مهتم كان عرفته 🙄',
-        'وين مختفيه': 'لو مهتمه كان عرفتي 🙃',
-        'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً ',
-        'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ ',
-        'الحاصل شنو': 'Nothing special 😔',
-        'كيف الكلام ده': 'عديل 😎',
-        'تابعه لي منو انتي': 'احمد فارس 🥺',
-        'الخبر شنو': 'الحمدلله انت كيف؟ ',
-        'احسنت بارك الله فيك': 'طيب الله انفاسك 🤍',
-        'فطوم': 'شيختنا 🤍🌹',
-        'الجديد شنو': 'طلتك يا غالي ',
-        'الامور شنو': 'الحمدلله ',
-        'الحمدلله': 'دام حمدك ✨',
-        'يديك العافيه': 'الله يعافيك يارب 🤲🌹',
-        'شكرا': 'عفواً يا عسل 🌹✨',
-        'مشتاقين': '🥺🥺✨',
+        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
+        'الأخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'الاخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'الطورك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'منور': 'النور نورك والله يا حبيبنا! 🌟',
+        'ياسمين': 'عيونها ولبيها! معاك ياسمين، آمرني يا غالي؟ 😍',
+        'كيفك': 'الحمد لله طالما إنت بخير، أمورنا باسطة! ✨',
+        'تمام': 'دائماً تمام يا رب، علك طيب؟ 🌸'
     }
     
     if user_text in auto_replies:
-        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        await update.message.reply_text(auto_replies[user_text])
+        reply = auto_replies[user_text]
+        save_chat_to_file(user_info, user_text, reply)
+        time.sleep(0.5)
+        await update.message.reply_text(reply)
         return
 
-    # === [فلترة الـ 40 ألف عضو في الجروبات] ===
-    # البوت في الجروب ما يرد إلا لو تم عمل Reply عليه، أو منشن باسمه، أو رسالة من المالك (أحمد)
-    if is_group:
-        is_reply_to_bot = (
-            update.message.reply_to_message and
-            update.message.reply_to_message.from_user and
-            update.message.reply_to_message.from_user.id == context.bot.id
+    is_voice_intent = is_incoming_voice
+    if user_text and any(vt in user_text.lower() for vt in ['ريكورد', 'فويس', 'صوت', 'اشرحي']):
+        is_voice_intent = True
+
+    if user_id not in user_memory: user_memory[user_id] = []
+
+    current_time_str = time.strftime('%I:%M %p')
+    current_date_str = time.strftime('%A، %Y-%m-%d')
+
+    provocation_keywords = [
+        'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
+        'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
+        'يا وهم', 'وهمية', 'وهميه', 'سجمك', 'رمادك', 'قليلة ادب', 'قليلة أدب', 'بلا يخمك', 'طيري'
+    ]
+    is_provoked = any(word in user_text.lower() for word in provocation_keywords)
+
+    religious_keywords = ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'ايه', 'حديث', 'فقه', 'فتوى', 'فتوي', 'دين', 'إسلام', 'اسلام', 'صلاة', 'حلال', 'حرام', 'شرع']
+    is_religious = any(w in user_text.lower() for w in religious_keywords)
+
+    if is_religious:
+        sys_instruction = (
+            "أنتِ اسمك ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار، وباللغة العربية الفصحى الرصينة فقط. "
+            "ممنوع استخدام الإيموجيات تماماً، واجعلي الرد دقيقاً ومختصراً في سطرين."
         )
-        has_name_trigger = "ياسمين" in user_text or f"@{bot_username}" in user_text
-        
-        if not is_owner and not is_reply_to_bot and not has_name_trigger:
-            return  # تجاهل صامت للرسائل العادية في الجروبات الكبيرة عشان ما تححصل مشكلة ضغط
-
-    # فحص هل المستخدم طالب فويس / صوت
-    wants_voice = any(w in user_text for w in ['صوتيه', 'مقطع صوتي', 'فويس', 'تسجيل', 'صوتك'])
-
-    # إظهار حالة "جاري الكتابة..." البسيطة
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE if wants_voice else ChatAction.TYPING)
-
-    # === [ثانياً: تحويل الرسالة للذكاء الاصطناعي جيميناي باسم ياسمين] ===
-    try:
-        extra_prompt = f"المتحدث اسمه {user_name}. "
-        if is_owner:
-            extra_prompt += "هذا هو أحمد مبرمجك وصانعك الفخم والوحيد، دلعيه وكوني فخورة بيه شديد! "
-        elif is_admin_user:
-            extra_prompt += "هذا الشخص مشرف (أدمن) في الجروب، احترميه وردي عليه بتقدير خاص. "
-
-        system_instruction = (
-            'أنتِ بوت تليجرام واسمك "ياسمين". صانعك ومطورك ومبرمجك الأساسي '
-            'هو المبرمج الفخم أحمد (أحمد فارس). '
-            'قواعد الشخصية والأسلوب: '
-            '1. اتكلمي بلهجة عامية سودانية ودودة جداً، خفيفة، ومرحة. '
-            '2. استعملي الإيموجيات اللطيفة والظريفة دايماً في كل رسائلك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
-            '3. ردودك تكون قصيرة ومختصرة (سطرين بالكتير)، وممنوع الجفاف أو الردود الرسمية الجامدة! '
-            f'4. {extra_prompt}'
-        )
-
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=f"{user_name}: {user_text}",
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.8
+    elif is_provoked:
+        if is_admin:
+            sys_instruction = (
+                f"أنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، لكنكِ تعرفين أنه يمزح معك. "
+                f"ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف (مثلاً: حسي أنا غبية يا أحمد؟ زعلتني منك.. 🥺). "
+                f"اجعي الرد سطر واحد وعاطفي."
             )
-        )
-        
-        if response and response.text:
-            reply_text = response.text.strip()
-            if wants_voice:
-                await send_voice_response(update, context, reply_text)
-            else:
-                await update.message.reply_text(reply_text)
         else:
-            await update.message.reply_text("عذراً يا غالي، ما قدرت افهم الرسالة كويس، أرسلها لي تاني! ✨")
-        
-    except Exception as e:
-        print(f"حدث خطأ في الاتصال بجوجل: {e}")
-        await update.message.reply_text("عذراً، السيرفر مضغوط ثواني، جرب أرسل تاني!")
+            sys_instruction = (
+                f"أنتِ ياسمين. هذا المستخدم قام باستفزازك. ردي عليه بدافع الدفاع عن النفس! "
+                f"كوني قوية الشخصية، حازمة، وناشفة جداً. ردي بلهجة سودانية صارمة تضع حداً للمستخدم دون شتائم "
+                f"(مثلاً: الزم حدودك يا أخ، أنا ما برضى الحقارة، اتكلم بأدب!). اجعلي الرد سطر واحد، واستخدمي إيموجيات حادة (🤨، 🛑، ✋)."
+            )
+    elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
+        if is_admin:
+            sys_instruction = (
+                f"الوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة دون أي قيود. {group_context_info}"
+            )
+        else:
+            sys_instruction = (
+                f"أنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً. {group_context_info}"
+            )
+    else:
+        if is_admin:
+            sys_instruction = (
+                f"الوقت الآن: {current_time_str}، التاريخ: {current_date_str}. أنتِ ياسمين، فتاة سودانية حقيقية وعفوية. "
+                f"تتحدثين مع مبرمجك أحمد كصديق مقرب. ردي بروح إنسانية خفيفة، وبلهجة سودانية دافئة وتلقائية جداً. "
+                f"اكتبي سطر واحد فقط ومختصر، واستخدمي كلمات من الواقع وإيموجيات حية. {group_context_info}"
+            )
+        else:
+            sys_instruction = (
+                f"الوقت الحالي: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية، لطيفة ومرحة. "
+                f"ردي على ونسة المستخدم العادية بنفس أسلوبه: لو كان حنيناً كوني حنينة معه، ولو كان عفوياً كوني عفوية ومرحة. "
+                f"تكلمي بلهجة سودانية خفيفة, بروح بشرية كاملة وإيجاز شديد (سطر واحد فقط!)، واستخدمي إيموجيات متناسقة. {group_context_info}"
+            )
 
-# 4. تشغيل وتدوير البوت
+    full_conversation_history = "الونسة السابقة:\n"
+    for msg in user_memory[user_id]: full_conversation_history += f"{msg}\n"
+    full_conversation_history += f"المستخدم: {user_text}\nياسمين:"
+
+    reply_result = None
+
+    # المحاولة بـ Gemini باستخدام system_instruction المخصص
+    if GEMINI_KEYS:
+        for _ in range(len(GEMINI_KEYS)):
+            try:
+                k = random.choice(GEMINI_KEYS)
+                ai_client = genai.Client(api_key=k)
+                response = ai_client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=full_conversation_history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=sys_instruction,
+                        temperature=0.8
+                    )
+                )
+                if response and response.text:
+                    reply_result = response.text.strip()
+                    break
+            except Exception as e:
+                print(f"[Gemini Error]: {e}")
+                continue
+
+    # Fallback إضافي ومباشر في حال عدم توفر Gemini أو فشله
+    combined_prompt = f"{sys_instruction}\n\n{full_conversation_history}"
+    if not reply_result: reply_result = ask_groq(combined_prompt)
+    if not reply_result: reply_result = ask_openrouter(combined_prompt)
+
+    if reply_result and len(reply_result) > 1:
+        user_memory[user_id].append(f"المستخدم: {user_text}")
+        user_memory[user_id].append(f"ياسمين: {reply_result}")
+        if len(user_memory[user_id]) > 6: user_memory[user_id] = user_memory[user_id][-6:]
+
+        save_chat_to_file(user_info, user_text, reply_result)
+
+        if is_voice_intent:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+            voice_io = text_to_live_voice(reply_result)
+            if voice_io:
+                voice_io.seek(0)
+                caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
+                await update.message.reply_voice(voice=voice_io, caption=caption_text)
+                return
+
+        await update.message.reply_text(reply_result)
+    else:
+        await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
+
 if __name__ == '__main__':
-    print("البوت بدأ الشغل بنجاح واستقرار باسم ياسمين.. 🚀")
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
+    app.add_handler(MessageHandler((filters.TEXT | filters.AUDIO | filters.VOICE) & ~filters.COMMAND, handle_message))
     app.run_polling()
