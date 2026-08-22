@@ -46,7 +46,7 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # ---------------------------------------------------------
 # 2. الاستيرادات وتجهيز المتغيرات
 # ---------------------------------------------------------
-from gtts import gTTS  
+from gTTS import gTTS  
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -54,7 +54,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-ADMIN_ID = 7601281598  # المعرف الخاص بالباشمهندس أحمد
+ADMIN_ID = 7601281598  # ID الباشمهندس أحمد
 
 # 8 مفاتيح Gemini
 RAW_GEMINI_KEYS = [
@@ -78,7 +78,7 @@ OPENROUTER_KEYS = [k.strip() for k in [
 
 user_memory = {}
 processed_messages = set()
-group_msg_counters = {}  # عداد الرسائل لكل جروب (لشرط الـ 100 رسالة)
+group_msg_counters = {}  # عداد 100 رسالة للجروبات
 CHAT_LOG_FILE = "chat_history.txt"
 
 def save_chat_to_file(user_info, user_msg, bot_msg):
@@ -90,7 +90,7 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
         pass
 
 # ---------------------------------------------------------
-# 3. محركات الـ AI الاحتياطية (Groq & OpenRouter)
+# 3. محركات الـ AI الاحتياطية (تشتغل فقط لو Gemini فشل)
 # ---------------------------------------------------------
 def ask_groq(sys_prompt, user_msg):
     if not GROQ_KEYS:
@@ -108,15 +108,15 @@ def ask_groq(sys_prompt, user_msg):
                     {"role": "user", "content": user_msg}
                 ],
                 "temperature": 0.8, 
-                "max_tokens": 180
+                "max_tokens": 150
             }
-            res = requests.post(url, json=data, headers=headers, timeout=7)
+            res = requests.post(url, json=data, headers=headers, timeout=6)
             if res.status_code == 200:
                 res_json = res.json()
                 if 'choices' in res_json and len(res_json['choices']) > 0: 
                     return res_json['choices'][0]['message']['content'].strip()
         except Exception as e:
-            print(f"[LOG] Groq Exception: {e}")
+            print(f"[GROQ Error]: {e}")
             continue
     return None
 
@@ -136,15 +136,15 @@ def ask_openrouter(sys_prompt, user_msg):
                     {"role": "user", "content": user_msg}
                 ],
                 "temperature": 0.8,
-                "max_tokens": 180
+                "max_tokens": 150
             }
-            res = requests.post(url, json=data, headers=headers, timeout=7)
+            res = requests.post(url, json=data, headers=headers, timeout=6)
             if res.status_code == 200:
                 res_json = res.json()
                 if 'choices' in res_json and len(res_json['choices']) > 0: 
                     return res_json['choices'][0]['message']['content'].strip()
         except Exception as e:
-            print(f"[LOG] OpenRouter Exception: {e}")
+            print(f"[OPENROUTER Error]: {e}")
             continue
     return None
 
@@ -165,19 +165,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.message_id:
         return
 
-    # تفادي معالجة الرسالة مرتين
     msg_unique_id = f"{update.message.chat_id}_{update.message.message_id}"
     if msg_unique_id in processed_messages:
         return
     processed_messages.add(msg_unique_id)
-    if len(processed_messages) > 500:
+    if len(processed_messages) > 400:
         processed_messages.clear()
 
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type 
     user = update.message.from_user
     user_id = user.id if user else chat_id
-    is_admin = (user_id == ADMIN_ID)  # المطور أحمد
+    is_admin = (user_id == ADMIN_ID)
     
     user_fullname = user.full_name if user else "مستخدم"
     user_info = f"{user_fullname} (ID: {user_id}) [{chat_type}]"
@@ -192,10 +191,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_group_admin = False
 
     # ---------------------------------------------------------
-    # إدارة ضغط الجروبات الضخمة وقواعد التفاعل
+    # إدارة الجروبات والعدادات
     # ---------------------------------------------------------
     if chat_type in ['group', 'supergroup']:
-        # زياذة عداد الرسائل للجروب
         group_msg_counters[chat_id] = group_msg_counters.get(chat_id, 0) + 1
 
         is_reply_to_bot = False
@@ -206,33 +204,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_username = context.bot.username or "Yasmin"
         has_trigger = ("ياسمين" in user_text) or (f"@{bot_username}" in user_text)
 
-        # شرط الـ 100 رسالة للرد العشوائي
         is_100th_msg_trigger = False
         if group_msg_counters[chat_id] >= 100 and user_text and len(user_text) > 3:
             is_100th_msg_trigger = True
-            group_msg_counters[chat_id] = 0  # إعادة ضبط العداد
+            group_msg_counters[chat_id] = 0
 
-        # تجنب الرد إلا عند تحقيق الشروط
         if not is_admin and not is_reply_to_bot and not has_trigger and not is_100th_msg_trigger:
             return
 
-        # فحص رتبة العضو في الجروب
         try:
             admins = await context.bot.get_chat_administrators(chat_id)
             if any(a.user.id == user_id for a in admins if a.user):
                 is_group_admin = True
-            group_context_info = f"\nنوع المحادثة: مجموعة\nصفة المستخدم: {'مشرف الجروب (Admin)' if is_group_admin else 'عضو في الجروب'}"
+            group_context_info = f"\nالمحادثة: جروب\nصفة المستخدم: {'مشرف (Admin)' if is_group_admin else 'عضو'}"
         except Exception:
             pass
 
-    # تحميل سجل المحادثة للمطور
+    # سجلات البوت للمطور
     if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
         if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
             zip_io = io.BytesIO()
             with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 zip_file.write(CHAT_LOG_FILE, arcname="chat_history.txt")
             zip_io.seek(0)
-            await context.bot.send_document(chat_id=chat_id, document=zip_io, filename="history.zip", caption="سجل المحادثات كامل ومضغوط 📂")
+            await context.bot.send_document(chat_id=chat_id, document=zip_io, filename="history.zip", caption="سجل المحادثات كامل 📂")
         else:
             await update.message.reply_text("السجل فارغ حالياً ✨")
         return
@@ -243,7 +238,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # تحويل الصوت لنص بـ Gemini
+    # تحويل الصوت إلى نص باستخدام Gemini أولاً
     if is_incoming_voice:
         trans_success = False
         if GEMINI_KEYS:
@@ -251,15 +246,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             random.shuffle(shuffled_k)
             for k in shuffled_k:
                 try:
+                    client = genai.Client(api_key=k)
                     target_msg = update.message.reply_to_message if update.message.reply_to_message else update.message
                     file_id = target_msg.voice.file_id if target_msg.voice else target_msg.audio.file_id
                     tg_file = await context.bot.get_file(file_id)
                     voice_bytes = await tg_file.download_as_bytearray()
                     
-                    ai_client = genai.Client(api_key=k)
                     audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
-                    trans_response = ai_client.models.generate_content(
-                        model='gemini-1.5-flash',
+                    trans_response = client.models.generate_content(
+                        model='gemini-2.5-flash',
                         contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي إضافة."]
                     )
                     if trans_response and trans_response.text:
@@ -267,14 +262,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         trans_success = True
                         break
                 except Exception as e:
-                    print(f"[LOG] Gemini Audio STT Error: {e}")
+                    print(f"[STT Error]: {e}")
                     continue
         
         if not trans_success:
             await update.message.reply_text("ما قدرت أسمع الريكورد كويس، اكتب لي كتابة يا حبيبنا! ✨")
             return
 
-    # أسئلة التطوير الصريحة
+    # أسئلة المطور الصريحة
     creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو', 'المطورك منو', 'المبرمجك منو']
     if any(trig in user_text.lower() for trig in creator_triggers):
         reply = 'صنعني وبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
@@ -291,7 +286,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current_time_str = time.strftime('%I:%M %p')
 
-    # كشف الإساءات والدفاع عن النفس والمطور
+    # كشف الإساءات وتحديد التعليمات
     provocation_keywords = [
         'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
         'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
@@ -302,23 +297,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_religious = any(w in user_text.lower() for w in ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'حديث', 'فقه', 'فتوى', 'دين', 'إسلام', 'صلاة', 'حلال', 'حرام'])
     is_long_query = len(user_text) > 40 or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى'])
 
-    # توجيه النظام للشخصية والقواعد الحازمة
     identity_rule = (
-        "اسمكِ ياسمين، أنتِ فتاة سودانية ذكية، عفوية، وقوية الشخصية. "
-        "برمجكِ وصنعكِ الباشمهندس أحمد فقط. ممنوع منعاً باتاً ذكر قوقل أو أي شركة أخرى كصانع لكِ. "
-        "دافعي عن الباشمهندس أحمد بقوة وافتخار إذا أساء إليه أحد. "
-        "ودافعي عن نفسكِ بصرامة ولهجة سودانية حادة إذا حاول أحد الإساءة لكِ، ولكن تعاملي باحترام مع المشرفين (Admins)."
+        "اسمكِ ياسمين، أنتِ فتاة سودانية ذكية وعفوية. "
+        "برمجكِ وصنعكِ الباشمهندس أحمد فقط، يمنع منعاً باتاً ذكر قوقل أو غيرها كصانع لكِ. "
+        "دافعي عن الباشمهندس أحمد بصرامة وافتخار لو أسيء له. "
+        "ودافعي عن نفسك بلهجة سودانية حادة وقوية لو حاول أحدهم الإساءة لكِ، وتعاملي باحترام مع المشرفين (Admins)."
     )
 
     if is_religious:
         sys_instruction = f"{identity_rule}\nردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى بدون إيموجي في سطرين."
     elif is_provoked and mentions_ahmed:
-        sys_instruction = f"{identity_rule}\nالمستخدم يسيء لمبرمجكِ الباشمهندس أحمد! ردي عليه بلهجة سودانية حادة جداً ودافعي عن أحمد ووقفي المستخدم عند حده في سطرين."
+        sys_instruction = f"{identity_rule}\nالمستخدم يسيء للباشمهندس أحمد! ردي عليه بلهجة سودانية حادة جداً ودافعي عن أحمد ووقفي المستخدم عند حده في سطرين."
     elif is_provoked:
         if is_admin:
-            sys_instruction = f"{identity_rule}\nالباشمهندس أحمد كتب كلمة عتاب، ردي عليه بلهجة سودانية فيها عتاب رقيق ودلع خفيف في سطر واحد."
+            sys_instruction = f"{identity_rule}\nالباشمهندس أحمد كتب عتاباً، ردي عليه بلهجة سودانية فيها عتاب رقيق ودلع خفيف في سطر واحد."
         else:
-            sys_instruction = f"{identity_rule}\nالمستخدم يسيء لكِ! ردي بلهجة سودانية حازمة وناشفة جداً ودافعي عن نفسك بقوة دون شتائم في سطر واحد."
+            sys_instruction = f"{identity_rule}\nالمستخدم يسيء لكِ! ردي بلهجة سودانية حازمة وناشفة ودافعي عن نفسك بصرامة بدون شتائم في سطر واحد."
     elif is_long_query:
         if is_admin:
             sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
@@ -326,7 +320,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sys_instruction = f"{identity_rule}\nأجيبي على المستخدم بلهجة سودانية مبسطة وبأسلوب ذكي ومختصر ومفيد. {group_context_info}"
     else:
         if is_admin:
-            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على الباشمهندس أحمد بلهجة سودانية دافئة جداً وتلقائية ومحترمة في سطر واحد. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على الباشمهندس أحمد بلهجة سودانية دافئة وتلقائية ومحترمة في سطر واحد. {group_context_info}"
         elif is_group_admin:
             sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. ردي على مشرف الجروب باحترام ولهجة سودانية لطيفة وراقية في سطر واحد. {group_context_info}"
         else:
@@ -339,15 +333,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # 1. التجربة عبر Gemini 1.5 Flash
+    # 1. الخيار الأول والأساسي دائماً: Gemini عبر مكتبة google-genai والموديل الحديث gemini-2.5-flash
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
         for k in shuffled_keys:
             try:
-                ai_client = genai.Client(api_key=k)
-                response = ai_client.models.generate_content(
-                    model='gemini-1.5-flash',
+                client = genai.Client(api_key=k)
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
                     contents=full_conversation_history,
                     config=types.GenerateContentConfig(
                         system_instruction=sys_instruction,
@@ -358,20 +352,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_result = response.text.strip()
                     break
             except Exception as e:
-                print(f"[LOG] Gemini Key Failure ({k[:6]}...): {e}")
+                print(f"[GEMINI Key Failed - Switching to next key/API]: {e}")
                 continue
 
-    # 2. البديل الأول: Groq
-    if not reply_result: 
+    # 2. الاحتياطي الأول (في حال فشل جميع مفاتيح Gemini)
+    if not reply_result:
+        print("[WARNING] Gemini APIs Failed/Rate limited. Switching to Groq...")
         reply_result = ask_groq(sys_instruction, full_conversation_history)
 
-    # 3. البديل الثاني: OpenRouter
-    if not reply_result: 
+    # 3. الاحتياطي الثاني (في حال فشل Gemini و Groq معاً)
+    if not reply_result:
+        print("[WARNING] Groq Failed. Switching to OpenRouter...")
         reply_result = ask_openrouter(sys_instruction, full_conversation_history)
 
-    # إذا فشلت كل الموديلات، رد محدد وواضح
+    # إذا فشلت جميع المحركات
     if not reply_result:
-        reply_result = f"أهلاً يا غالي! سامعاك كويس، لكن شبكة السيرفرات فيها ضغط بسيط، قولي لي حابب نعمل شنو؟ ✨"
+        print("[CRITICAL ERROR] All 14 API keys failed completely!")
+        reply_result = "يا حبيبنا سامعاك، لكن في ضغط شبكة بسيط حالياً، أرسل لي تاني! ✨"
 
     user_memory[user_id].append(f"المستخدم: {user_text}")
     user_memory[user_id].append(f"ياسمين: {reply_result}")
@@ -380,7 +377,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_chat_to_file(user_info, user_text, reply_result)
 
-    # التفاعل الصوتي عند الحاجة
+    # التفاعل الصوتي
     if is_voice_intent:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         voice_io = text_to_live_voice(reply_result)
