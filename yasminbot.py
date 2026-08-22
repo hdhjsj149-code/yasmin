@@ -76,11 +76,11 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بأحمد
+ADMIN_ID = 7601281598  # الـ ID الخاص بـ أحمد
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# متغيرات المؤقتات والذاكرة المؤقتة للجروبات
+# متغيرات الذاكرة والمؤقتات
 chat_histories = {}
 group_mute_status = {}
 group_message_counters = {}
@@ -95,6 +95,17 @@ BASE_SYSTEM_INSTRUCTION = (
     '2. اللهجة: عامية سودانية بسيطة، ودودة، ومرحة جداً وعفوية بدون تكلف أو رسميات. '
     '3. ركزي في الونسة وما تنسي الكلام الاتقال ليك قبل شوية.'
 )
+
+# --- [دالة مساعدة لإرسال حالة الكتابة بشكل غير معطل مستمر] ---
+async def send_continuous_action(bot, chat_id, action_type=ChatAction.TYPING, duration=5.0):
+    """ترسل حالة الكتابة أو تسجيل الصوت لتلجرام بصورة تضمن ظهورها طوال وقت تجهيز الرد"""
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=action_type)
+        except Exception:
+            pass
+        await asyncio.sleep(4.0)
 
 # --- [4. دالة معالجة الرسائل] ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,18 +238,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # === [ثانياً: تشغيل حالة جاري الكتابة المتواصلة أثناء معالجة AI] ===
-    stop_typing = False
-    async def keep_typing():
-        while not stop_typing:
-            try:
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-
-    typing_task = asyncio.create_task(keep_typing())
-
     # إدارة ذاكرة المحادثة القريبة (آخر 6 رسائل)
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
@@ -262,17 +261,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
 
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=history,
-            config=types.GenerateContentConfig(
-                system_instruction=full_system_instruction,
-                temperature=0.7
-            )
+        # تشغيل إشعار "جاري الكتابة..." في الخلفية
+        action_task = asyncio.create_task(
+            send_continuous_action(context.bot, chat_id, ChatAction.TYPING, duration=10.0)
         )
 
-        stop_typing = True
-        typing_task.cancel()
+        # تشغيل طلب Gemini بشكل Async عبر Thread لتجنب تجميد البوت
+        def call_gemini():
+            return ai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=history,
+                config=types.GenerateContentConfig(
+                    system_instruction=full_system_instruction,
+                    temperature=0.7
+                )
+            )
+
+        response = await asyncio.to_thread(call_gemini)
+
+        # إلغاء مهمة الـ action بعد استلام الرد
+        action_task.cancel()
 
         if response.text:
             reply_text = response.text.strip()
@@ -283,8 +291,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("عذراً، لم أستطع فهم الرسالة، جرب صياغتها بطريقة أخرى.")
 
     except Exception as e:
-        stop_typing = True
-        typing_task.cancel()
         print(f"حدث خطأ في الاتصال بجوجل: {e}")
         if not is_group:
             await update.message.reply_text("عذراً، السيرفر مضغوط ثواني، جرب أرسل تاني!")
