@@ -94,17 +94,17 @@ def switch_to_next_key():
 
 ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بأحمد
 
-chat_sessions = {}
+chat_histories = {}
 group_mute_status = {}
 group_message_counters = {}
 last_spontaneous_time = {}
 
 BASE_SYSTEM_INSTRUCTION = (
-    'أنتِ بوت تليجرام ذكي ولطيف واسمك "ياسمين". صانعك ومطورك ومبرمجك الأساسي '
+    'أنتِ بوت تليجرام واسمك "ياسمين". صانعك ومطورك ومبرمجك الأساسي '
     'هو المبرمج الفخم أحمد (أحمد فارس). '
     'قواعد الشخصية والأسلوب: '
     '1. اتكلمي بلهجة عامية سودانية ودودة جداً، خفيفة، ومرحة. '
-    '2. استعملي الإيموجيات اللطيفة والظريفة دايماً في ردودك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
+    '2. لااااازم تستعملي الإيموجيات اللطيفة والظريفة دايماً في كل رسائلك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
     '3. ردودك تكون قصيرة ومختصرة (سطرين بالكتير)، وممنوع الجفاف أو الردود الرسمية الجامدة! '
     '4. اتعاملي مع الناس بحفاوة، ولما يتكلم معاك أحمد دلعيه وكوني فخورة بيه جداً.'
 )
@@ -201,30 +201,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_mentioned and not should_spontaneously_reply:
             return
 
-    # === [الردود التلقائية] ===
+    # === [الردود التلقائية المباشرة] ===
     auto_replies = {
-        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
+        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹✨',
+        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ 😉',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
-        'منور': 'النور نورك والله يا حبيبنا! 🌟',
+        'منور': 'النور نورك والله يا حبيبنا! 🌟✨',
         'وين انت': 'لو مهتم كان عرفته 😎',
         'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً',
         'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ',
-        'يديك العافيه': 'الله يعافيك يارب 🤲',
-        'شكرا': 'عفواً 🌹'
+        'يديك العافيه': 'الله يعافيك يارب 🤲🌹',
+        'شكرا': 'عفواً يا عسل 🌹✨'
     }
 
     if user_text in auto_replies:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.5)
         await update.message.reply_text(auto_replies[user_text])
         return
 
     # فحص طلب الصوت
     wants_voice = any(w in user_text for w in ['صوتيه', 'مقطع صوتي', 'فويس', 'تسجيل', 'صوتك'])
 
-    # === [حالة جاري الكتابة / التسجيل] ===
+    # إدارة الذاكرة التاريخية للرسائل
+    if chat_id not in chat_histories:
+        chat_histories[chat_id] = []
+
+    history = chat_histories[chat_id]
+    history.append({"role": "user", "parts": [{"text": f"المتحدث ({profile['name']}): {user_text}"}]})
+
+    if len(history) > 6:
+        chat_histories[chat_id] = history[-6:]
+        history = chat_histories[chat_id]
+
+    # === [إرسال حالة يكتب مع معالجة حتمية للتوقيف] ===
     stop_action = False
     async def keep_action():
         action_type = ChatAction.RECORD_VOICE if wants_voice else ChatAction.TYPING
@@ -233,57 +244,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_chat_action(chat_id=chat_id, action=action_type)
             except Exception:
                 pass
-            await asyncio.sleep(3.5)
+            await asyncio.sleep(3)
 
     action_task = asyncio.create_task(keep_action())
 
-    # استخدام إدارة جلسات المحادثة الرسمية لـ Gemini (chats.create)
     reply_text = None
-    for attempt in range(3):
-        try:
-            client = get_genai_client()
-            extra_info = f"المتحدث اسمه {profile['name']}. "
-            if is_owner:
-                extra_info += "هذا هو أحمد مبرمجك وصانعك الوحيد. "
-            elif is_admin_user:
-                extra_info += "هذا أدمن الجروب، احترميه وردي عليه بلطف. "
+    try:
+        # المحاولة مع تدوير المفاتيح والحد الزمني
+        for attempt in range(len(GEMINI_KEYS) or 1):
+            try:
+                client = get_genai_client()
+                extra_info = f"المتحدث اسمه {profile['name']}. "
+                if is_owner:
+                    extra_info += "هذا هو أحمد مبرمجك وصانعك الوحيد. "
+                elif is_admin_user:
+                    extra_info += "هذا أدمن الجروب، احترميه وردي عليه بلطف. "
 
-            if profile['notes']:
-                extra_info += f"معلومات محفوظة عنه: ({profile['notes']})."
+                if profile['notes']:
+                    extra_info += f"معلومات محفوظة عنه: ({profile['notes']})."
 
-            full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
+                full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
 
-            # إنشاء أو استخدام شات محادثة تفاعلي يدار رسمياً
-            if chat_id not in chat_sessions:
-                chat_sessions[chat_id] = client.chats.create(
-                    model='gemini-2.5-flash',
-                    config=types.GenerateContentConfig(
-                        system_instruction=full_system_instruction,
-                        temperature=0.75
+                # تنفيذ الطلب المباشر للـ API مع مهلة زامنية آمنة
+                def call_gemini():
+                    return client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=history,
+                        config=types.GenerateContentConfig(
+                            system_instruction=full_system_instruction,
+                            temperature=0.8
+                        )
                     )
-                )
 
-            chat = chat_sessions[chat_id]
-            prompt = f"({profile['name']}): {user_text}"
-            response = chat.send_message(prompt)
+                response = await asyncio.wait_for(asyncio.to_thread(call_gemini), timeout=12.0)
 
-            if response and response.text:
-                reply_text = response.text.strip()
-                break
-        except Exception as e:
-            print(f"تحديث الجلسة بسبب خطأ: {e}")
-            chat_sessions.pop(chat_id, None)
-            switch_to_next_key()
-            await asyncio.sleep(0.5)
+                if response and response.text:
+                    reply_text = response.text.strip()
+                    break
+            except Exception as e:
+                print(f"خطأ في الاتصال بالمفتاح الحالي ({e})، جاري التبديل للمفتاح التالي...")
+                switch_to_next_key()
+                await asyncio.sleep(0.5)
 
-    stop_action = True
-    action_task.cancel()
+    finally:
+        stop_action = True
+        action_task.cancel()
 
     if reply_text:
+        history.append({"role": "model", "parts": [{"text": reply_text}]})
         if wants_voice:
             await send_voice_response(update, context, reply_text)
         else:
             await update.message.reply_text(reply_text)
+    else:
+        await update.message.reply_text("أهلين يا غالي! السيرفر كان فيه ضغط بسيط ورجعت ليك تاني ✨😉")
 
 # --- [6. تشغيل وتدوير البوت] ---
 if __name__ == '__main__':
