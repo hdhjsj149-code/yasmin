@@ -66,7 +66,7 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
             f.write(f"--- [{timestamp}] ---\nالمستخدم: {user_info}\nالرسالة: {user_msg}\nرد ياسمين: {bot_msg}\n\n")
     except: pass
 
-def ask_groq(prompt):
+def ask_groq(sys_prompt, user_msg):
     if not GROQ_KEYS: return None
     try:
         key = random.choice(GROQ_KEYS)
@@ -74,18 +74,21 @@ def ask_groq(prompt):
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         data = {
             "model": "llama-3.1-8b-instant", 
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg}
+            ],
             "temperature": 0.8, 
             "max_tokens": 150
         }
-        res = requests.post(url, json=data, headers=headers, timeout=8)
+        res = requests.post(url, json=data, headers=headers, timeout=5)
         res_json = res.json()
         if 'choices' in res_json and len(res_json['choices']) > 0: 
             return res_json['choices'][0]['message']['content'].strip()
         return None
     except: return None
 
-def ask_openrouter(prompt):
+def ask_openrouter(sys_prompt, user_msg):
     if not OPENROUTER_KEYS: return None
     try:
         key = random.choice(OPENROUTER_KEYS)
@@ -93,11 +96,14 @@ def ask_openrouter(prompt):
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "HTTP-Referer": "https://render.com", "X-Title": "YasminBot"}
         data = {
             "model": "meta-llama/llama-3.1-8b-instruct:free",
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg}
+            ],
             "temperature": 0.8,
             "max_tokens": 150
         }
-        res = requests.post(url, json=data, headers=headers, timeout=8)
+        res = requests.post(url, json=data, headers=headers, timeout=5)
         res_json = res.json()
         if 'choices' in res_json and len(res_json['choices']) > 0: 
             return res_json['choices'][0]['message']['content'].strip()
@@ -192,31 +198,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_long_query = True
         except: pass
 
-    # الردود السريعة المباشرة (شاملة كل أشكال سؤال الصانع)
-    auto_replies = {
-        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
-        'الأخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
-        'الاخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
-        'الطورك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'الطورك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'الصنعك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'المبرمجك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'منو طورك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'منو صنعك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
-        'منور': 'النور نورك والله يا حبيبنا! 🌟',
-        'ياسمين': 'عيونها ولبيها! معاك ياسمين، آمرني يا غالي؟ 😍',
-        'كيفك': 'الحمد لله طالما إنت بخير، أمورنا باسطة! ✨',
-        'تمام': 'دائماً تمام يا رب، علك طيب؟ 🌸'
-    }
-    
-    # فحص مباشر لأي نص فيه سؤال عن المطور
-    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو']
+    # مستشعر مباشر وسريع لصانع البوت
+    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو', 'المطورك منو', 'المبرمجك منو']
     if any(trig in user_text.lower() for trig in creator_triggers):
         reply = 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
         save_chat_to_file(user_info, user_text, reply)
         await update.message.reply_text(reply)
         return
+
+    auto_replies = {
+        'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
+        'الأخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'الاخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
+        'منور': 'النور نورك والله يا حبيبنا! 🌟',
+        'ياسمين': 'عيونها ولبيها! معاك ياسمين، آمرني يا غالي؟ 😍',
+        'كيفك': 'الحمد لله طالما إنت بخير، أمورنا باسطة! ✨',
+        'تمام': 'دائماً تمام يا رب، علك طيب؟ 🌸'
+    }
 
     if user_text in auto_replies:
         reply = auto_replies[user_text]
@@ -231,7 +229,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_memory: user_memory[user_id] = []
 
     current_time_str = time.strftime('%I:%M %p')
-    current_date_str = time.strftime('%A، %Y-%m-%d')
 
     provocation_keywords = [
         'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
@@ -243,26 +240,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     religious_keywords = ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'ايه', 'حديث', 'فقه', 'فتوى', 'فتوي', 'دين', 'إسلام', 'اسلام', 'صلاة', 'حلال', 'حرام', 'شرع']
     is_religious = any(w in user_text.lower() for w in religious_keywords)
 
-    # القاعدة الذهبية للتعريف
-    identity_rule = "تنبيه صارم جداً: أنتِ اسمك ياسمين، صممك وبرمجك المطور والباشمهندس أحمد فقط. ممنوع تماماً ونهائياً ذكر قوقل (Google) أو أي شركة أخرى كصانع لك، لو سألك أي شخص من صممك أو طورك قولي فوراً: صنعني وبرمجني الباشمهندس أحمد."
+    identity_rule = "أنتِ اسمك ياسمين، صممك وبرمجك المهندس أحمد فقط. ممنوع تماماً ذكر قوقل أو أي شركة أخرى كصانع لك."
 
     if is_religious:
-        sys_instruction = f"{identity_rule}\nأنتِ اسمك ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى. ممنوع استخدام الإيموجيات، والرد في سطرين."
+        sys_instruction = f"{identity_rule}\nأنتِ ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى بدون إيموجي في سطرين."
     elif is_provoked:
         if is_admin:
-            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف في سطر واحد."
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، ردي بلهجة سودانية فيها عتاب رقيق وزعل خفيف في سطر واحد."
         else:
-            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. كوني قوية الشخصية وناشفة جداً. ردي بلهجة سودانية صارمة تضع حداً للمستخدم دون شتائم في سطر واحد."
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. كوني قوية الشخصية وناشفة. ردي بلهجة سودانية صارمة دون شتائم في سطر واحد."
     elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
         if is_admin:
-            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين. ردي على أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
         else:
-            sys_instruction = f"{identity_rule}\nأنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. أجيبي على المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد. {group_context_info}"
     else:
         if is_admin:
-            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ ياسمين، فتاة سودانية حقيقية وعفوية. ردي على أحمد بلهجة سودانية دافئة وتلقائية جداً في سطر واحد. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين سودانية عفوية. ردي على أحمد بلهجة سودانية دافئة في سطر واحد. {group_context_info}"
         else:
-            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية ولطيفة. ردي بلهجة سودانية خفيفة في سطر واحد وبإيجاز. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت: {current_time_str}. أنتِ ياسمين سودانية لطيفة. ردي بلهجة سودانية خفيفة في سطر واحد. {group_context_info}"
 
     full_conversation_history = "الونسة السابقة:\n"
     for msg in user_memory[user_id]: full_conversation_history += f"{msg}\n"
@@ -270,6 +266,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
+    # تجربة كافة المفاتيح المتاحة لـ Gemini مع تجاوز أي مفتاح فيه ضغط
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
@@ -287,34 +284,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if response and hasattr(response, 'text') and response.text:
                     reply_result = response.text.strip()
                     break
-            except:
+            except Exception as e:
                 continue
 
-    combined_prompt = f"{sys_instruction}\n\n{full_conversation_history}"
+    # في حال فشل Gemini ننتقل فوراً لـ Groq ثم OpenRouter
     if not reply_result: 
-        reply_result = ask_groq(combined_prompt)
+        reply_result = ask_groq(sys_instruction, full_conversation_history)
     if not reply_result: 
-        reply_result = ask_openrouter(combined_prompt)
+        reply_result = ask_openrouter(sys_instruction, full_conversation_history)
 
-    if reply_result and len(reply_result) > 1:
-        user_memory[user_id].append(f"المستخدم: {user_text}")
-        user_memory[user_id].append(f"ياسمين: {reply_result}")
-        if len(user_memory[user_id]) > 6: user_memory[user_id] = user_memory[user_id][-6:]
+    # رد احتياطي محلي في حال انقطاع كل الشبكات الخارجية
+    if not reply_result:
+        fallback_answers = [
+            "سمعتك يا غالي، أها اها قولي تاني؟ ✨",
+            "معاك يا حبيب، واصل كلامك الباستيك ده! 🌸",
+            "أبشر بالخير، معاك ياسمين سامعاك كويس! 😉"
+        ]
+        reply_result = random.choice(fallback_answers)
 
-        save_chat_to_file(user_info, user_text, reply_result)
+    user_memory[user_id].append(f"المستخدم: {user_text}")
+    user_memory[user_id].append(f"ياسمين: {reply_result}")
+    if len(user_memory[user_id]) > 6: user_memory[user_id] = user_memory[user_id][-6:]
 
-        if is_voice_intent:
-            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-            voice_io = text_to_live_voice(reply_result)
-            if voice_io:
-                voice_io.seek(0)
-                caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
-                await update.message.reply_voice(voice=voice_io, caption=caption_text)
-                return
+    save_chat_to_file(user_info, user_text, reply_result)
 
-        await update.message.reply_text(reply_result)
-    else:
-        await update.message.reply_text("السيرفرات كبست ثواني يا غالي ورسل لي تاني! 🌟⏳")
+    if is_voice_intent:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+        voice_io = text_to_live_voice(reply_result)
+        if voice_io:
+            voice_io.seek(0)
+            caption_text = "تفضل يا مبرمجي 😍🎧" if is_admin else "تفضل الرد الصوتي.. 😉🎧"
+            await update.message.reply_voice(voice=voice_io, caption=caption_text)
+            return
+
+    await update.message.reply_text(reply_result)
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).write_timeout(30).build()
