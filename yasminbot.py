@@ -46,7 +46,12 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # ---------------------------------------------------------
 # 2. الاستيرادات وتجهيز المتغيرات
 # ---------------------------------------------------------
-from gTTS import gTTS  
+try:
+    from gTTS import gTTS
+    HAS_GTTS = True
+except ImportError:
+    HAS_GTTS = False
+
 from google import genai
 from google.genai import types
 from telegram import Update
@@ -78,7 +83,7 @@ OPENROUTER_KEYS = [k.strip() for k in [
 
 user_memory = {}
 processed_messages = set()
-group_msg_counters = {}  # عداد 100 رسالة للجروبات
+group_msg_counters = {}
 CHAT_LOG_FILE = "chat_history.txt"
 
 def save_chat_to_file(user_info, user_msg, bot_msg):
@@ -90,7 +95,7 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
         pass
 
 # ---------------------------------------------------------
-# 3. محركات الـ AI الاحتياطية (تشتغل فقط لو Gemini فشل)
+# 3. محركات الـ AI الاحتياطية
 # ---------------------------------------------------------
 def ask_groq(sys_prompt, user_msg):
     if not GROQ_KEYS:
@@ -149,6 +154,8 @@ def ask_openrouter(sys_prompt, user_msg):
     return None
 
 def text_to_live_voice(text_data):
+    if not HAS_GTTS:
+        return None
     try:
         tts = gTTS(text=text_data, lang='ar', slow=False)
         voice_io = io.BytesIO()
@@ -190,9 +197,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_context_info = ""
     is_group_admin = False
 
-    # ---------------------------------------------------------
-    # إدارة الجروبات والعدادات
-    # ---------------------------------------------------------
     if chat_type in ['group', 'supergroup']:
         group_msg_counters[chat_id] = group_msg_counters.get(chat_id, 0) + 1
 
@@ -220,7 +224,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    # سجلات البوت للمطور
     if is_admin and user_text.lower() in ['لوق', 'logs', 'لوقات', 'log']:
         if os.path.exists(CHAT_LOG_FILE) and os.path.getsize(CHAT_LOG_FILE) > 0:
             zip_io = io.BytesIO()
@@ -238,7 +241,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # تحويل الصوت إلى نص باستخدام Gemini أولاً
+    # تحويل الصوت إلى نص
     if is_incoming_voice:
         trans_success = False
         if GEMINI_KEYS:
@@ -269,7 +272,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("ما قدرت أسمع الريكورد كويس، اكتب لي كتابة يا حبيبنا! ✨")
             return
 
-    # أسئلة المطور الصريحة
     creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو', 'المطورك منو', 'المبرمجك منو']
     if any(trig in user_text.lower() for trig in creator_triggers):
         reply = 'صنعني وبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
@@ -286,7 +288,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current_time_str = time.strftime('%I:%M %p')
 
-    # كشف الإساءات وتحديد التعليمات
     provocation_keywords = [
         'غبيه', 'غبية', 'تافه', 'تافهه', 'تافهة', 'حمار', 'كلب', 'اسكتي', 'انكتمي', 'حقيرة', 'حقيره',
         'فاشله', 'فاشلة', 'بايخة', 'بايخه', 'تعبانة', 'تعبانه', 'غبي', 'صنيعك سيء', 'ما بتفهمي', 'ما بتفهم',
@@ -333,41 +334,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # 1. الخيار الأول والأساسي دائماً: Gemini عبر مكتبة google-genai والموديل الحديث gemini-2.5-flash
+    # 1. Gemini الخيار الأول المضمون
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
         for k in shuffled_keys:
             try:
                 client = genai.Client(api_key=k)
+                # استخدام توليد بسيط يلغي تحذير الـ AFC
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
                     contents=full_conversation_history,
                     config=types.GenerateContentConfig(
                         system_instruction=sys_instruction,
-                        temperature=0.8
+                        temperature=0.8,
+                        tools=[] # تعطيل الأدوات لمنع تحذير AFC
                     )
                 )
                 if response and hasattr(response, 'text') and response.text:
                     reply_result = response.text.strip()
                     break
             except Exception as e:
-                print(f"[GEMINI Key Failed - Switching to next key/API]: {e}")
+                print(f"[GEMINI Key Failed]: {e}")
                 continue
 
-    # 2. الاحتياطي الأول (في حال فشل جميع مفاتيح Gemini)
+    # 2. Groq الاحتياطي الأول
     if not reply_result:
-        print("[WARNING] Gemini APIs Failed/Rate limited. Switching to Groq...")
         reply_result = ask_groq(sys_instruction, full_conversation_history)
 
-    # 3. الاحتياطي الثاني (في حال فشل Gemini و Groq معاً)
+    # 3. OpenRouter الاحتياطي الثاني
     if not reply_result:
-        print("[WARNING] Groq Failed. Switching to OpenRouter...")
         reply_result = ask_openrouter(sys_instruction, full_conversation_history)
 
-    # إذا فشلت جميع المحركات
     if not reply_result:
-        print("[CRITICAL ERROR] All 14 API keys failed completely!")
         reply_result = "يا حبيبنا سامعاك، لكن في ضغط شبكة بسيط حالياً، أرسل لي تاني! ✨"
 
     user_memory[user_id].append(f"المستخدم: {user_text}")
@@ -377,7 +376,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_chat_to_file(user_info, user_text, reply_result)
 
-    # التفاعل الصوتي
     if is_voice_intent:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         voice_io = text_to_live_voice(reply_result)
