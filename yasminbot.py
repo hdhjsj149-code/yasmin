@@ -1,3 +1,4 @@
+
 import os
 import threading
 import time
@@ -77,14 +78,17 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 
-GEMINI_KEYS = [k.strip() for k in os.environ.get('GEMINI_API_KEY', '').split(',') if k.strip()]
+# معالجة جلب وتدوير مفاتيح API بطلب سليم ومضمون
+raw_keys = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_KEYS = [k.strip() for k in raw_keys.replace('\n', ',').split(',') if k.strip()]
 current_key_index = 0
 
 def get_genai_client():
     global current_key_index
     if not GEMINI_KEYS:
+        # اعتماد المفتاح الافتراضي التلقائي من النظام لو القائمة فارغة
         return genai.Client()
-    key = GEMINI_KEYS[current_key_index]
+    key = GEMINI_KEYS[current_key_index % len(GEMINI_KEYS)]
     return genai.Client(api_key=key)
 
 def switch_to_next_key():
@@ -92,7 +96,7 @@ def switch_to_next_key():
     if len(GEMINI_KEYS) > 1:
         current_key_index = (current_key_index + 1) % len(GEMINI_KEYS)
 
-ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بأحمد
+ADMIN_ID = 7601281598  # الـ ID الخاص بأحمد
 
 chat_histories = {}
 group_mute_status = {}
@@ -104,7 +108,7 @@ BASE_SYSTEM_INSTRUCTION = (
     'هو المبرمج الفخم أحمد (أحمد فارس). '
     'قواعد الشخصية والأسلوب: '
     '1. اتكلمي بلهجة عامية سودانية ودودة جداً، خفيفة، ومرحة. '
-    '2. لااااازم تستعملي الإيموجيات اللطيفة والظريفة دايماً في كل رسائلك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
+    '2. استعملي الإيموجيات اللطيفة والظريفة دايماً في كل رسائلك (✨, 🌹, 🥺, 😂, 😉, 🙈, 🔥). '
     '3. ردودك تكون قصيرة ومختصرة (سطرين بالكتير)، وممنوع الجفاف أو الردود الرسمية الجامدة! '
     '4. اتعاملي مع الناس بحفاوة، ولما يتكلم معاك أحمد دلعيه وكوني فخورة بيه جداً.'
 )
@@ -173,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حفظتها عندي في الذاكرة الدائمة يا {profile['name']} 👌✨")
         return
 
-    # === [فلترة وتصفية الرسائل في الجروبات] ===
+    # === [فلترة وتصفية الرسائل في الجروبات الكبيرة] ===
     is_mentioned = False
     if is_group:
         is_reply_to_bot = (
@@ -186,6 +190,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_reply_to_bot or has_name_trigger:
             is_mentioned = True
 
+        # الرد العفوي: بعد 100 رسالة وساعة كاملة
         now = time.time()
         group_message_counters[chat_id] = group_message_counters.get(chat_id, 0) + 1
         last_time = last_spontaneous_time.get(chat_id, 0)
@@ -198,17 +203,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     last_spontaneous_time[chat_id] = now
                     group_message_counters[chat_id] = 0
 
+        # تجاهل الرسالة تماماً في الجروبات إذا لم يتحقق الشرط
         if not is_mentioned and not should_spontaneously_reply:
             return
 
-    # === [الردود التلقائية المباشرة] ===
+    # === [الردود التلقائية السريعة] ===
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹✨',
-        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ 😉',
+        'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ 😉✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟✨',
-        'وين انت': 'لو مهتم كان عرفته 😎',
+        'وين انت': 'لو مهتم كان عرفته 😎✨',
         'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً',
         'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ',
         'يديك العافيه': 'الله يعافيك يارب 🤲🌹',
@@ -221,10 +227,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # فحص طلب الصوت
     wants_voice = any(w in user_text for w in ['صوتيه', 'مقطع صوتي', 'فويس', 'تسجيل', 'صوتك'])
 
-    # إدارة الذاكرة التاريخية للرسائل
+    # إدارة السجل التاريخي (History)
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
 
@@ -235,7 +240,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_histories[chat_id] = history[-6:]
         history = chat_histories[chat_id]
 
-    # === [إرسال حالة يكتب مع معالجة حتمية للتوقيف] ===
+    # === [مؤشر الكتابة والاتصال] ===
     stop_action = False
     async def keep_action():
         action_type = ChatAction.RECORD_VOICE if wants_voice else ChatAction.TYPING
@@ -249,9 +254,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action_task = asyncio.create_task(keep_action())
 
     reply_text = None
+    max_retries = max(len(GEMINI_KEYS), 3)
+
     try:
-        # المحاولة مع تدوير المفاتيح والحد الزمني
-        for attempt in range(len(GEMINI_KEYS) or 1):
+        for _ in range(max_retries):
             try:
                 client = get_genai_client()
                 extra_info = f"المتحدث اسمه {profile['name']}. "
@@ -265,24 +271,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
 
-                # تنفيذ الطلب المباشر للـ API مع مهلة زامنية آمنة
-                def call_gemini():
-                    return client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=history,
-                        config=types.GenerateContentConfig(
-                            system_instruction=full_system_instruction,
-                            temperature=0.8
+                # تجهيز محتوى الـ History المتوافق تماماً مع المكتبة
+                formatted_contents = []
+                for item in history:
+                    formatted_contents.append(
+                        types.Content(
+                            role=item["role"],
+                            parts=[types.Part.from_text(text=item["parts"][0]["text"])]
                         )
                     )
 
-                response = await asyncio.wait_for(asyncio.to_thread(call_gemini), timeout=12.0)
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model='gemini-2.5-flash',
+                    contents=formatted_contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=full_system_instruction,
+                        temperature=0.8
+                    )
+                )
 
                 if response and response.text:
                     reply_text = response.text.strip()
                     break
             except Exception as e:
-                print(f"خطأ في الاتصال بالمفتاح الحالي ({e})، جاري التبديل للمفتاح التالي...")
+                print(f"[Gemini API Exception]: {e} | جاري تبديل المفتاح...")
                 switch_to_next_key()
                 await asyncio.sleep(0.5)
 
@@ -296,8 +309,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_voice_response(update, context, reply_text)
         else:
             await update.message.reply_text(reply_text)
-    else:
-        await update.message.reply_text("أهلين يا غالي! السيرفر كان فيه ضغط بسيط ورجعت ليك تاني ✨😉")
 
 # --- [6. تشغيل وتدوير البوت] ---
 if __name__ == '__main__':
