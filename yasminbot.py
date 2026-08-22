@@ -2,9 +2,10 @@ import os
 import threading
 import time
 import random
-import socket
 import asyncio
 import sqlite3
+from io import BytesIO
+from gtts import gTTS
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 
@@ -75,12 +76,25 @@ from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-ADMIN_ID = 7601281598  # الـ ID الخاص بـ أحمد
 
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+# مفاتيح Gemini المفصولة بفاصلة لعمل Rotating آلي عند الضغط
+GEMINI_KEYS = [k.strip() for k in os.environ.get('GEMINI_API_KEY', '').split(',') if k.strip()]
+current_key_index = 0
 
-# متغيرات الذاكرة والمؤقتات
+def get_genai_client():
+    global current_key_index
+    if not GEMINI_KEYS:
+        return genai.Client()
+    key = GEMINI_KEYS[current_key_index]
+    return genai.Client(api_key=key)
+
+def switch_to_next_key():
+    global current_key_index
+    if len(GEMINI_KEYS) > 1:
+        current_key_index = (current_key_index + 1) % len(GEMINI_KEYS)
+
+ADMIN_ID = 7601281598  # الـ ID المحدث الخاص بأحمد
+
 chat_histories = {}
 group_mute_status = {}
 group_message_counters = {}
@@ -96,18 +110,20 @@ BASE_SYSTEM_INSTRUCTION = (
     '3. ركزي في الونسة وما تنسي الكلام الاتقال ليك قبل شوية.'
 )
 
-# --- [دالة مساعدة لإرسال حالة الكتابة بشكل غير معطل مستمر] ---
-async def send_continuous_action(bot, chat_id, action_type=ChatAction.TYPING, duration=5.0):
-    """ترسل حالة الكتابة أو تسجيل الصوت لتلجرام بصورة تضمن ظهورها طوال وقت تجهيز الرد"""
-    start_time = time.time()
-    while time.time() - start_time < duration:
-        try:
-            await bot.send_chat_action(chat_id=chat_id, action=action_type)
-        except Exception:
-            pass
-        await asyncio.sleep(4.0)
+# --- [4. دالة معالجة وتوليد الصوت gTTS] ---
+async def send_voice_response(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    try:
+        await context.bot.send_chat_action(chat_id=update.message.chat_id, action=ChatAction.RECORD_VOICE)
+        tts = gTTS(text=text, lang='ar', slow=False)
+        voice_io = BytesIO()
+        tts.write_to_fp(voice_io)
+        voice_io.seek(0)
+        await update.message.reply_voice(voice=voice_io)
+    except Exception as e:
+        print(f"خطأ في إرسال الصوت: {e}")
+        await update.message.reply_text(text)
 
-# --- [4. دالة معالجة الرسائل] ---
+# --- [5. دالة معالجة الرسائل الرئيسية] ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -158,87 +174,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"حفظتها عندي في الذاكرة الدائمة يا {profile['name']} 👌✨")
         return
 
-    # شروط التفاعل داخل الجروبات
+    # === [فلترة وتصفية الرسائل في الجروبات الكبيرة جداً] ===
     is_mentioned = False
     if is_group:
+        # 1. هل الرسالة ريبلاي على ياسمين؟
         is_reply_to_bot = (
             update.message.reply_to_message and
             update.message.reply_to_message.from_user and
             update.message.reply_to_message.from_user.id == context.bot.id
         )
+        # 2. هل الرسالة فيها اسم ياسمين أو المنشن؟
         has_name_trigger = "ياسمين" in user_text or f"@{bot_username}" in user_text
 
         if is_reply_to_bot or has_name_trigger:
             is_mentioned = True
 
+        # عدّاد الرسائل والتوقيت للرد العفوي (بعد 100 رسالة وساعة كاملة)
         now = time.time()
         group_message_counters[chat_id] = group_message_counters.get(chat_id, 0) + 1
         last_time = last_spontaneous_time.get(chat_id, 0)
 
         should_spontaneously_reply = False
-        if not is_mentioned and (now - last_time > 3600) and (group_message_counters[chat_id] >= 40):
-            if len(user_text) > 10 and not user_text.startswith('/'):
-                if random.random() < 0.3:
+        if not is_mentioned and (now - last_time >= 3600) and (group_message_counters[chat_id] >= 100):
+            if len(user_text) > 8 and not user_text.startswith('/'):
+                if random.random() < 0.25:  # اختيار عشوائي ذكي
                     should_spontaneously_reply = True
                     last_spontaneous_time[chat_id] = now
                     group_message_counters[chat_id] = 0
 
+        # إذا لم يُذكر اسمها ولم يتحقق شرط الساعة والـ 100 رسالة، تتجاهل الرسالة طوالي
         if not is_mentioned and not should_spontaneously_reply:
             return
 
-    # === [أولاً: لستة الردود التلقائية الثابتة والـ 35 خانة الفاضية] ===
+    # === [الردود التلقائية] ===
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منور يا غالي! 🌹',
         'الاخبار شنو': 'كلشي تمام التمام والامور طيبة، إنت كيف أمورك؟ ✨',
         'الطورك منو': 'طورني وصنعني المبرمج أحمد! 🤖🔥',
-        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد، ! 😉💪',
+        'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الفخم أحمد! 😉💪',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
         'وين انت': 'لو مهتم كان عرفته 😎',
-        'وين مختفي': 'لو مهتم كان عرفته 🙄',
-        'وين مختفيه': 'لو مهتمه كان عرفتي 🙃',
-        'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً ',
-        'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ ',
-        'الحاصل شنو': 'Nothing special 😔',
-        'كيف الكلام ده': 'عديل 😎',
-        'تابعه لي منو انتي ': 'احمد فارس 🥺',
-        'الخبر شنو': 'الحمدلله انت كيف؟ ',
-        'احسنت بارك الله فيك': 'طيب الله انفاسك 🤍',
-        'فطوم': 'شيختنا 🤍🌹',
-        'الجديد شنو': 'طلتك يا غالي ',
-        'الامور شنو': 'الحمدلله ',
-        'الحمدلله ': 'دام حمدك',
-        'يديك العافيه ': 'الله يعافيك يارب 🤲',
-        'شكرا': 'عفواً 🌹',
-        'مشتاقين': '🥺🥺',
-        
-        # ⬇️ الـ 35 خانة الفاضية جاهزة لـ تعديلك ⬇️
-        'الكلمة 18': 'الرد هنا 18',
-        'الكلمة 19': 'الرد هنا 19',
-        'الكلمة 20': 'الرد هنا 20',
-        'الكلمة 21': 'الرد هنا 21',
-        'الكلمة 22': 'الرد هنا 22',
-        'الكلمة 23': 'الرد هنا 23',
-        'الكلمة 24': 'الرد هنا 24',
-        'الكلمة 25': 'الرد هنا 25',
-        'الكلمة 26': 'الرد هنا 26',
-        'الكلمة 27': 'الرد هنا 27',
-        'الكلمة 28': 'الرد هنا 28',
-        'الكلمة 29': 'الرد هنا 29',
-        'الكلمة 30': 'الرد هنا 30',
-        'الكلمة 31': 'الرد هنا 31',
-        'الكلمة 32': 'الرد هنا 32',
-        'الكلمة 33': 'الرد هنا 33',
-        'الكلمة 34': 'الرد هنا 34',
-        'الكلمة 35': 'الرد here 35',
+        'صباح الخير': 'صبـ(⛅)ـُ(آٍلـٍـً(🌺)ـٍورٍدً)ـ(⛅)ـٍآٍآٍحً',
+        'مساء الخير': 'مۡسَـ(🍀)ـاء الۣخـ(🌸)ـيۡݛ',
+        'يديك العافيه': 'الله يعافيك يارب 🤲',
+        'شكرا': 'عفواً 🌹'
     }
 
     if user_text in auto_replies:
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(1.2)
+        await asyncio.sleep(1)
         await update.message.reply_text(auto_replies[user_text])
         return
 
-    # إدارة ذاكرة المحادثة القريبة (آخر 6 رسائل)
+    # فحص طلب الصوت
+    wants_voice = any(w in user_text for w in ['صوتيه', 'مقطع صوتي', 'فويس', 'تسجيل', 'صوتك'])
+
+    # === [حالة جاري الكتابة / التسجيل] ===
+    stop_action = False
+    async def keep_action():
+        action_type = ChatAction.RECORD_VOICE if wants_voice else ChatAction.TYPING
+        while not stop_action:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action=action_type)
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    action_task = asyncio.create_task(keep_action())
+
+    # إدارة الذاكرة السياقية (آخر 6 رسائل)
     if chat_id not in chat_histories:
         chat_histories[chat_id] = []
 
@@ -249,26 +253,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_histories[chat_id] = history[-6:]
         history = chat_histories[chat_id]
 
-    try:
-        extra_info = f"المتحدث اسمه {profile['name']}. "
-        if is_owner:
-            extra_info += "هذا هو أحمد مبرمجك وصانعك الوحيد. "
-        elif is_admin_user:
-            extra_info += "هذا أدمن الجروب، احترميه وردي عليه بلطف. "
+    # التنفيذ الآمن بدون إظهار أخطاء مع التحويل بين المفاتيح
+    reply_text = None
+    for attempt in range(3):
+        try:
+            client = get_genai_client()
+            extra_info = f"المتحدث اسمه {profile['name']}. "
+            if is_owner:
+                extra_info += "هذا هو أحمد مبرمجك وصانعك الوحيد. "
+            elif is_admin_user:
+                extra_info += "هذا أدمن الجروب، احترميه وردي عليه بلطف. "
 
-        if profile['notes']:
-            extra_info += f"معلومات محفوظة عنه: ({profile['notes']})."
+            if profile['notes']:
+                extra_info += f"معلومات محفوظة عنه: ({profile['notes']})."
 
-        full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
+            full_system_instruction = BASE_SYSTEM_INSTRUCTION + "\n" + extra_info
 
-        # تشغيل إشعار "جاري الكتابة..." في الخلفية
-        action_task = asyncio.create_task(
-            send_continuous_action(context.bot, chat_id, ChatAction.TYPING, duration=10.0)
-        )
-
-        # تشغيل طلب Gemini بشكل Async عبر Thread لتجنب تجميد البوت
-        def call_gemini():
-            return ai_client.models.generate_content(
+            response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=history,
                 config=types.GenerateContentConfig(
@@ -277,25 +278,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             )
 
-        response = await asyncio.to_thread(call_gemini)
+            if response and response.text:
+                reply_text = response.text.strip()
+                break
+        except Exception as e:
+            print(f"فشل الاتصال، جاري تحويل المفتاح... الخطأ: {e}")
+            switch_to_next_key()
+            await asyncio.sleep(1)
 
-        # إلغاء مهمة الـ action بعد استلام الرد
-        action_task.cancel()
+    stop_action = True
+    action_task.cancel()
 
-        if response.text:
-            reply_text = response.text.strip()
-            history.append({"role": "model", "parts": [{"text": reply_text}]})
-            await update.message.reply_text(reply_text)
+    if reply_text:
+        history.append({"role": "model", "parts": [{"text": reply_text}]})
+        if wants_voice:
+            await send_voice_response(update, context, reply_text)
         else:
-            if not is_group:
-                await update.message.reply_text("عذراً، لم أستطع فهم الرسالة، جرب صياغتها بطريقة أخرى.")
+            await update.message.reply_text(reply_text)
 
-    except Exception as e:
-        print(f"حدث خطأ في الاتصال بجوجل: {e}")
-        if not is_group:
-            await update.message.reply_text("عذراً، السيرفر مضغوط ثواني، جرب أرسل تاني!")
-
-# --- [5. تشغيل وتدوير البوت] ---
+# --- [6. تشغيل وتدوير البوت] ---
 if __name__ == '__main__':
     print("البوت بدأ الشغل بنجاح واستقرار باسم ياسمين.. 🚀")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
