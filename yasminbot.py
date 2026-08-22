@@ -55,8 +55,9 @@ RAW_GEMINI_KEYS = [
 GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 
 GROQ_KEYS = [k.strip() for k in [
-    os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2'),
-    os.environ.get('GROQ_API_KEY_3'), os.environ.get('GROQ_API_KEY_4')
+    os.environ.get('GROQ_API_KEY_1'), 
+    os.environ.get('GROQ_API_KEY_2')
+
 ] if k]
 
 OPENROUTER_KEYS = [k.strip() for k in [
