@@ -40,12 +40,11 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# 2. المكتبات والمتغيرات
+# 2. الاستيرادات والتهيئة
 try:
     from gTTS import gTTS
     HAS_GTTS = True
-except Exception as e:
-    print(f"[WARNING] gTTS Import Failed: {e}")
+except Exception:
     HAS_GTTS = False
 
 from google import genai
@@ -57,7 +56,6 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID = 7601281598
 
-# جمع المفاتيح وتنظيفها
 RAW_GEMINI_KEYS = [
     os.environ.get('GEMINI_API_KEY_1'), os.environ.get('GEMINI_API_KEY_2'),
     os.environ.get('GEMINI_API_KEY_3'), os.environ.get('GEMINI_API_KEY'),
@@ -67,7 +65,7 @@ RAW_GEMINI_KEYS = [
 GEMINI_KEYS = [k.strip() for k in RAW_GEMINI_KEYS if k and len(k.strip()) > 10]
 
 GROQ_KEYS = [k.strip() for k in [os.environ.get('GROQ_API_KEY_1'), os.environ.get('GROQ_API_KEY_2')] if k and len(k.strip()) > 5]
-OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2'), os.environ.get('OPENROUTER_API_KEY_3'), os.environ.get('OPENROUTER_API_KEY_4')] if k and len(k.strip()) > 5]
+OPENROUTER_KEYS = [k.strip() for k in [os.environ.get('OPENROUTER_API_KEY_1'), os.environ.get('OPENROUTER_API_KEY_2')] if k and len(k.strip()) > 5]
 
 user_memory = {}
 processed_messages = set()
@@ -82,13 +80,9 @@ def save_chat_to_file(user_info, user_msg, bot_msg):
     except Exception:
         pass
 
-# ---------------------------------------------------------
-# 3. محركات الـ AI الاحتياطية المحدثة
-# ---------------------------------------------------------
+# 3. محركات الاحتياط
 def ask_groq(sys_prompt, user_msg):
-    if not GROQ_KEYS:
-        print("[GROQ] No API keys found in Environment Variables!")
-        return None
+    if not GROQ_KEYS: return None
     shuffled = list(GROQ_KEYS)
     random.shuffle(shuffled)
     for key in shuffled:
@@ -106,19 +100,13 @@ def ask_groq(sys_prompt, user_msg):
             }
             res = requests.post(url, json=data, headers=headers, timeout=8)
             if res.status_code == 200:
-                print("[GROQ SUCCESS] Responded successfully.")
                 return res.json()['choices'][0]['message']['content'].strip()
-            else:
-                print(f"[GROQ ERROR] Status Code: {res.status_code}, Response: {res.text}")
-        except Exception as e:
-            print(f"[GROQ EXCEPTION]: {e}")
+        except Exception:
             continue
     return None
 
 def ask_openrouter(sys_prompt, user_msg):
-    if not OPENROUTER_KEYS:
-        print("[OPENROUTER] No API keys found in Environment Variables!")
-        return None
+    if not OPENROUTER_KEYS: return None
     shuffled = list(OPENROUTER_KEYS)
     random.shuffle(shuffled)
     for key in shuffled:
@@ -126,9 +114,7 @@ def ask_openrouter(sys_prompt, user_msg):
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://render.com",
-                "X-Title": "YasminBot"
+                "Content-Type": "application/json"
             }
             data = {
                 "model": "meta-llama/llama-3.3-70b-instruct:free",
@@ -141,12 +127,8 @@ def ask_openrouter(sys_prompt, user_msg):
             }
             res = requests.post(url, json=data, headers=headers, timeout=8)
             if res.status_code == 200:
-                print("[OPENROUTER SUCCESS] Responded successfully.")
                 return res.json()['choices'][0]['message']['content'].strip()
-            else:
-                print(f"[OPENROUTER ERROR] Status Code: {res.status_code}, Response: {res.text}")
-        except Exception as e:
-            print(f"[OPENROUTER EXCEPTION]: {e}")
+        except Exception:
             continue
     return None
 
@@ -157,13 +139,10 @@ def text_to_live_voice(text_data):
         voice_io = io.BytesIO()
         tts.write_to_fp(voice_io)
         return voice_io
-    except Exception as e:
-        print(f"[GTTS ERROR]: {e}")
+    except Exception:
         return None
 
-# ---------------------------------------------------------
 # 4. معالج الرسائل
-# ---------------------------------------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_memory, processed_messages, group_msg_counters
     if not update.message or not update.message.message_id: return
@@ -213,7 +192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # تحويل الصوت لـ نص
+    # تحويل الصوت لنص بواسطة الموديل الصحيح gemini-2.0-flash
     if is_incoming_voice:
         trans_success = False
         if GEMINI_KEYS:
@@ -229,7 +208,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     audio_part = types.Part.from_bytes(data=bytes(voice_bytes), mime_type="audio/ogg")
                     trans_response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-2.0-flash',
                         contents=[audio_part, "اكتب النص الصوتي بدقة وبدون أي إضافة."]
                     )
                     if trans_response and trans_response.text:
@@ -249,40 +228,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_memory: user_memory[user_id] = []
     user_memory[user_id].append(f"المستخدم: {user_text}")
     
-    full_prompt = f"التعليمات: {sys_instruction}\n" + "\n".join(user_memory[user_id][-5:])
-
+    conversation_history = "\n".join(user_memory[user_id][-5:])
     reply_result = None
 
-    # 1. التجربة الأولى: Gemini
+    # الاستدلال المباشر عبر Gemini مع ضبط الـ Config بشكل صحيح
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
         for k in shuffled_keys:
             try:
                 client = genai.Client(api_key=k)
+                config = types.GenerateContentConfig(
+                    system_instruction=sys_instruction,
+                    temperature=0.7
+                )
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=full_prompt
+                    model='gemini-2.0-flash',
+                    contents=conversation_history,
+                    config=config
                 )
                 if response and hasattr(response, 'text') and response.text:
                     reply_result = response.text.strip()
-                    print("[GEMINI SUCCESS] Responded successfully.")
                     break
             except Exception as e:
-                print(f"[GEMINI KEY FAILED]: {e}")
+                print(f"[GEMINI ERROR]: {e}")
                 continue
 
-    # 2. التجربة الثانية: Groq (إذا فشل جيمناي)
+    # Backup 1: Groq
     if not reply_result:
-        print("[FALLBACK] Gemini failed. Trying Groq...")
         reply_result = ask_groq(sys_instruction, user_text)
 
-    # 3. التجربة الثالثة: OpenRouter (إذا فشل جيمناي و Groq)
+    # Backup 2: OpenRouter
     if not reply_result:
-        print("[FALLBACK] Groq failed. Trying OpenRouter...")
         reply_result = ask_openrouter(sys_instruction, user_text)
 
-    # الرسالة الأخيرة إذا فشل الكل
     if not reply_result:
         reply_result = "يا حبيبنا سامعاك، لكن في ضغط شبكة بسيط حالياً، أرسل لي تاني! ✨"
 
