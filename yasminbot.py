@@ -192,18 +192,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_long_query = True
         except: pass
 
+    # الردود السريعة المباشرة (شاملة كل أشكال سؤال الصانع)
     auto_replies = {
         'السلام عليكم': 'وعليكم السلام ورحمة الله وبركاته، منورنا يا غالي! 🌹✨',
         'الأخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
         'الاخبار شنو': 'والله كله تمام والحمد لله، إنت أحوالك شنو؟ شديد؟ 😉',
         'الطورك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'الطورك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
         'الصنعك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'الصنعك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'المبرمجك منو': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'منو طورك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
+        'منو صنعك': 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥',
         'منور': 'النور نورك والله يا حبيبنا! 🌟',
         'ياسمين': 'عيونها ولبيها! معاك ياسمين، آمرني يا غالي؟ 😍',
         'كيفك': 'الحمد لله طالما إنت بخير، أمورنا باسطة! ✨',
         'تمام': 'دائماً تمام يا رب، علك طيب؟ 🌸'
     }
     
+    # فحص مباشر لأي نص فيه سؤال عن المطور
+    creator_triggers = ['منو طورك', 'منو صنعك', 'منو برمجك', 'مين طورك', 'مين صنعك', 'من طورك', 'من صنعك', 'صنعك منو', 'طورك منو', 'برمجك منو']
+    if any(trig in user_text.lower() for trig in creator_triggers):
+        reply = 'صنعني ومبرمجني الأساسي هو الباشمهندس أحمد الفخم! 😎🔥'
+        save_chat_to_file(user_info, user_text, reply)
+        await update.message.reply_text(reply)
+        return
+
     if user_text in auto_replies:
         reply = auto_replies[user_text]
         save_chat_to_file(user_info, user_text, reply)
@@ -229,23 +243,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     religious_keywords = ['الله', 'الرسول', 'نبي', 'قرآن', 'قران', 'آية', 'ايه', 'حديث', 'فقه', 'فتوى', 'فتوي', 'دين', 'إسلام', 'اسلام', 'صلاة', 'حلال', 'حرام', 'شرع']
     is_religious = any(w in user_text.lower() for w in religious_keywords)
 
+    # القاعدة الذهبية للتعريف
+    identity_rule = "تنبيه صارم جداً: أنتِ اسمك ياسمين، صممك وبرمجك المطور والباشمهندس أحمد فقط. ممنوع تماماً ونهائياً ذكر قوقل (Google) أو أي شركة أخرى كصانع لك، لو سألك أي شخص من صممك أو طورك قولي فوراً: صنعني وبرمجني الباشمهندس أحمد."
+
     if is_religious:
-        sys_instruction = "أنتِ اسمك ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى. ممنوع استخدام الإيموجيات، والرد في سطرين."
+        sys_instruction = f"{identity_rule}\nأنتِ اسمك ياسمين. ردي على الموضوع الديني بقمة الأدب والوقار وباللغة العربية الفصحى. ممنوع استخدام الإيموجيات، والرد في سطرين."
     elif is_provoked:
         if is_admin:
-            sys_instruction = "أنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف في سطر واحد."
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. مبرمجك أحمد كتب كلمة مستفزة، ردي عليه بلهجة سودانية فيها عتاب رقيق وزعل خفيف في سطر واحد."
         else:
-            sys_instruction = "أنتِ ياسمين. كوني قوية الشخصية وناشفة جداً. ردي بلهجة سودانية صارمة تضع حداً للمستخدم دون شتائم في سطر واحد."
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين. كوني قوية الشخصية وناشفة جداً. ردي بلهجة سودانية صارمة تضع حداً للمستخدم دون شتائم في سطر واحد."
     elif is_long_query or any(w in user_text for w in ['ليش', 'ليه', 'كيف', 'اشرح', 'شنو يعني', 'معنى']):
         if is_admin:
-            sys_instruction = f"الوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ ياسمين صممك أحمد. ردي على سؤال أحمد التقني طويلاً وبذكاء مبرمجين ومباشرة. {group_context_info}"
         else:
-            sys_instruction = f"أنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nأنتِ ياسمين صممك أحمد. أجيبي على سؤال المستخدم بالفصحى المبسطة بأسلوب ذكي ومختصر ومفيد جداً. {group_context_info}"
     else:
         if is_admin:
-            sys_instruction = f"الوقت الآن: {current_time_str}. أنتِ ياسمين، فتاة سودانية حقيقية وعفوية. ردي على أحمد بلهجة سودانية دافئة وتلقائية جداً في سطر واحد. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ ياسمين، فتاة سودانية حقيقية وعفوية. ردي على أحمد بلهجة سودانية دافئة وتلقائية جداً في سطر واحد. {group_context_info}"
         else:
-            sys_instruction = f"الوقت الآن: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية ولطيفة. ردي بلهجة سودانية خفيفة في سطر واحد وبإيجاز. {group_context_info}"
+            sys_instruction = f"{identity_rule}\nالوقت الآن: {current_time_str}. أنتِ اسمك ياسمين، فتاة سودانية حيوية ولطيفة. ردي بلهجة سودانية خفيفة في سطر واحد وبإيجاز. {group_context_info}"
 
     full_conversation_history = "الونسة السابقة:\n"
     for msg in user_memory[user_id]: full_conversation_history += f"{msg}\n"
@@ -253,7 +270,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_result = None
 
-    # تجربة كافة المفاتيح المتاحة لـ Gemini
     if GEMINI_KEYS:
         shuffled_keys = list(GEMINI_KEYS)
         random.shuffle(shuffled_keys)
@@ -274,7 +290,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 continue
 
-    # في حال فشل Gemini نمر فوراً للخدمات البديلة
     combined_prompt = f"{sys_instruction}\n\n{full_conversation_history}"
     if not reply_result: 
         reply_result = ask_groq(combined_prompt)
