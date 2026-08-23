@@ -2726,8 +2726,7 @@ async def handle_message(
        ]:
 
     if chat_id not in APPROVED_GROUPS:
-
-        return
+    return
 
     if not update.message:
 
