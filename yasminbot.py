@@ -26,6 +26,21 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
 ADMIN_ID = 7601281598
 
+
+# ============================================================
+# صلاحيات القروبات والتواصل مع الأدمن
+# ============================================================
+
+APPROVED_GROUPS = set()
+
+CONTACT_REQUESTS = {}
+
+# اسم المستخدم الخاص بأحمد إذا عنده Username
+# مثال: ahmed_faris
+ADMIN_USERNAME = os.environ.get(
+    "ADMIN_USERNAME"
+)
+
 # ============================================================
 # Gemini
 # ============================================================
@@ -223,7 +238,11 @@ except Exception as e:
 # 5. Telegram
 # ============================================================
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 
 from telegram.constants import ChatAction
 
@@ -231,10 +250,10 @@ from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     MessageHandler,
-    CommandHandler,
+    CallbackQueryHandler,
     filters
 )
-
+from telegram.ext import ChatMemberHandler
 
 # ============================================================
 # 6. Gemini API Keys
@@ -2427,6 +2446,271 @@ async def admin_stats(
         )
 
 
+
+
+# ============================================================
+# طلب التواصل مع المهندس أحمد
+# ============================================================
+
+async def send_contact_request(
+    context,
+    user,
+    user_text
+):
+
+    try:
+
+        user_name = (
+            user.full_name
+            if user
+            else "مستخدم"
+        )
+
+        user_id = (
+            user.id
+            if user
+            else 0
+        )
+
+        CONTACT_REQUESTS[user_id] = {
+            "name": user_name,
+            "text": user_text
+        }
+
+        keyboard = InlineKeyboardMarkup([
+
+            [
+                InlineKeyboardButton(
+                    "📩 رسّل ليهو حسابي",
+                    callback_data=
+                        f"contact_yes:{user_id}"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "❌ رفض",
+                    callback_data=
+                        f"contact_no:{user_id}"
+                )
+            ]
+
+        ])
+
+        await context.bot.send_message(
+
+            chat_id=ADMIN_ID,
+
+            text=(
+                "🔔 زول داير يتواصل معاك\n\n"
+
+                f"👤 الاسم: {user_name}\n"
+                f"🆔 ID: {user_id}\n\n"
+
+                f"💬 الرسالة:\n{user_text}"
+            ),
+
+            reply_markup=keyboard
+        )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            f"[CONTACT REQUEST ERROR]: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return False
+
+
+
+# ============================================================
+# أزرار طلب التواصل
+# ============================================================
+
+async def handle_contact_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    # ==========================================
+    # حماية: الأدمن فقط
+    # ==========================================
+
+    if query.from_user.id != ADMIN_ID:
+
+        await query.answer(
+            "ما عندك صلاحية 😅",
+            show_alert=True
+        )
+
+        return
+
+    data = query.data or ""
+
+    # ==========================================
+    # موافقة
+    # ==========================================
+
+    if data.startswith(
+        "contact_yes:"
+    ):
+
+        try:
+
+            target_user_id = int(
+                data.split(":")[1]
+            )
+
+        except Exception:
+
+            return
+
+        request = CONTACT_REQUESTS.get(
+            target_user_id
+        )
+
+        if not request:
+
+            await query.edit_message_text(
+                "⚠️ الطلب انتهى أو غير موجود."
+            )
+
+            return
+
+        # ======================================
+        # إنشاء رابط حساب أحمد
+        # ======================================
+
+        if ADMIN_USERNAME:
+
+            admin_link = (
+                f"https://t.me/{ADMIN_USERNAME}"
+            )
+
+        else:
+
+            admin_link = (
+                f"tg://user?id={ADMIN_ID}"
+            )
+
+        try:
+
+            await context.bot.send_message(
+
+                chat_id=target_user_id,
+
+                text=(
+                    "❤️ المهندس أحمد وافق إنك "
+                    "تتواصل معاه.\n\n"
+                    "تقدر تدخل ليه من هنا 👇"
+                ),
+
+                reply_markup=InlineKeyboardMarkup([
+
+                    [
+                        InlineKeyboardButton(
+                            "👤 تواصل مع المهندس أحمد",
+                            url=admin_link
+                        )
+                    ]
+
+                ])
+            )
+
+            await query.edit_message_text(
+
+                "✅ تم إرسال حسابك للزول."
+            )
+
+        except Exception as e:
+
+            print(
+                f"[CONTACT SEND ERROR]: "
+                f"{type(e).__name__}: {e}"
+            )
+
+            await query.edit_message_text(
+
+                "⚠️ حصلت مشكلة في إرسال "
+                "حسابك للزول."
+            )
+
+        CONTACT_REQUESTS.pop(
+            target_user_id,
+            None
+        )
+
+        return
+
+    # ==========================================
+    # رفض
+    # ==========================================
+
+    if data.startswith(
+        "contact_no:"
+    ):
+
+        try:
+
+            target_user_id = int(
+                data.split(":")[1]
+            )
+
+        except Exception:
+
+            return
+
+        request = CONTACT_REQUESTS.get(
+            target_user_id
+        )
+
+        if not request:
+
+            await query.edit_message_text(
+                "⚠️ الطلب انتهى."
+            )
+
+            return
+
+        try:
+
+            await context.bot.send_message(
+
+                chat_id=target_user_id,
+
+                text=(
+                    "تمام ❤️\n"
+                    "المهندس أحمد ما متاح "
+                    "للتواصل حالياً."
+                )
+            )
+
+            await query.edit_message_text(
+                "❌ تم رفض طلب التواصل."
+            )
+
+        except Exception as e:
+
+            print(
+                f"[CONTACT REJECT ERROR]: "
+                f"{type(e).__name__}: {e}"
+            )
+
+        CONTACT_REQUESTS.pop(
+            target_user_id,
+            None
+            )
+
 # ============================================================
 # 33. معالجة الرسائل
 # ============================================================
@@ -2435,6 +2719,15 @@ async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
+    if chat_type in [
+    "group",
+    "supergroup"
+]:
+
+    if chat_id not in APPROVED_GROUPS:
+
+        return
 
     if not update.message:
 
@@ -2611,6 +2904,78 @@ async def handle_message(
         return
 
 
+
+    # ========================================================
+# هل المستخدم يريد التواصل مع المهندس أحمد؟
+# ========================================================
+
+contact_words = [
+
+    "احمد موجود",
+    "أحمد موجود",
+    "احمد وين",
+    "أحمد وين",
+    "داير احمد",
+    "داير أحمد",
+    "عايز احمد",
+    "عايز أحمد",
+    "عاوز احمد",
+    "عاوز أحمد",
+    "كلم احمد",
+    "كلم أحمد",
+    "اتواصل مع احمد",
+    "اتواصل مع أحمد",
+    "عايز اتواصل مع احمد",
+    "عايز اتواصل مع أحمد",
+    "ممكن اكلم احمد",
+    "ممكن أكلم أحمد",
+    "أحمد ده منو",
+    "احمد ده منو",
+    "من هو احمد",
+    "من هو أحمد",
+    "مين احمد",
+    "مين أحمد"
+]
+
+
+wants_admin_contact = any(
+    phrase in user_text.lower()
+    for phrase in contact_words
+)
+
+
+if (
+    wants_admin_contact
+    and not is_admin
+):
+
+    request_sent = await send_contact_request(
+
+        context,
+
+        user,
+
+        user_text
+    )
+
+    if request_sent:
+
+        await update.message.reply_text(
+
+            "أها إنت داير تصل للمهندس أحمد؟ 😄\n\n"
+            "أرسل ليهو هنا، حأخليهو يعرف "
+            "إنك داير تتواصل معاه."
+        )
+
+    else:
+
+        await update.message.reply_text(
+
+            "تمام 😄 وصلتني، لكن حصلت مشكلة "
+            "صغيرة في إرسال الطلب للمهندس أحمد."
+        )
+
+    return
     # ========================================================
     # حماية الأوامر الحساسة
     # ========================================================
@@ -2758,6 +3123,183 @@ async def handle_message(
                 return
 
 
+
+    # ============================================================
+# مراقبة إضافة ياسمين للقروبات
+# ============================================================
+
+async def handle_bot_membership(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    chat_member = update.my_chat_member
+
+    if not chat_member:
+        return
+
+    new_status = (
+        chat_member.new_chat_member.status
+    )
+
+    old_status = (
+        chat_member.old_chat_member.status
+    )
+
+    chat = chat_member.chat
+
+    # البوت دخل قروب
+    if (
+        new_status in ["member", "administrator"]
+        and old_status in [
+            "left",
+            "kicked"
+        ]
+    ):
+
+        # لا نفعّل القروب مباشرة
+        APPROVED_GROUPS.discard(
+            chat.id
+        )
+
+        added_by = (
+            chat_member.from_user
+        )
+
+        added_name = (
+            added_by.full_name
+            if added_by
+            else "مستخدم"
+        )
+
+        added_id = (
+            added_by.id
+            if added_by
+            else "غير معروف"
+        )
+
+        keyboard = InlineKeyboardMarkup([
+
+            [
+                InlineKeyboardButton(
+                    "✅ موافقة",
+                    callback_data=
+                        f"group_yes:{chat.id}"
+                ),
+
+                InlineKeyboardButton(
+                    "❌ رفض",
+                    callback_data=
+                        f"group_no:{chat.id}"
+                )
+            ]
+
+        ])
+
+        try:
+
+            await context.bot.send_message(
+
+                chat_id=ADMIN_ID,
+
+                text=(
+                    "🚨 تمت إضافة ياسمين لقروب جديد\n\n"
+                    f"👥 القروب: {chat.title}\n"
+                    f"🆔 Chat ID: {chat.id}\n\n"
+                    f"👤 أضافها: {added_name}\n"
+                    f"🆔 ID: {added_id}\n\n"
+                    "هل تسمح ليها تشتغل في القروب؟"
+                ),
+
+                reply_markup=keyboard
+            )
+
+        except Exception as e:
+
+            print(
+                f"[GROUP APPROVAL ERROR]: "
+                f"{type(e).__name__}: {e}"
+    )
+
+###################
+    async def handle_group_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    if query.from_user.id != ADMIN_ID:
+
+        await query.answer(
+            "ما عندك صلاحية 😅",
+            show_alert=True
+        )
+
+        return
+
+    data = query.data or ""
+
+    # ==========================================
+    # موافقة
+    # ==========================================
+
+    if data.startswith("group_yes:"):
+
+        try:
+
+            group_id = int(
+                data.split(":")[1]
+            )
+
+        except Exception:
+
+            return
+
+        APPROVED_GROUPS.add(
+            group_id
+        )
+
+        await query.edit_message_text(
+
+            "✅ تمت الموافقة.\n"
+            "ياسمين الآن مسموح ليها تشتغل في القروب."
+        )
+
+        return
+
+    # ==========================================
+    # رفض
+    # ==========================================
+
+    if data.startswith("group_no:"):
+
+        try:
+
+            group_id = int(
+                data.split(":")[1]
+            )
+
+        except Exception:
+
+            return
+
+        APPROVED_GROUPS.discard(
+            group_id
+        )
+
+        await query.edit_message_text(
+
+            "❌ تم رفض القروب.\n"
+            "ياسمين ما حترد فيه."
+        )
+
+        return
     # ========================================================
     # Voice / Audio
     # ========================================================
@@ -3527,10 +4069,22 @@ if __name__ == "__main__":
     )
 
 
+
+
+
     # ========================================================
     # أوامر عامة
     # ========================================================
 
+
+    app.add_handler(
+    CallbackQueryHandler(
+        handle_contact_callback,
+        pattern=r"^contact_(yes|no):"
+    )
+    )
+
+    
     app.add_handler(
         CommandHandler(
             "commands",
@@ -3576,6 +4130,13 @@ if __name__ == "__main__":
             "myinfo",
             my_info_command
         )
+    )
+
+    app.add_handler(
+    CallbackQueryHandler(
+        handle_group_callback,
+        pattern=r"^group_(yes|no):"
+    )
     )
 
 
