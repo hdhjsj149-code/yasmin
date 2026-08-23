@@ -2720,14 +2720,6 @@ async def handle_message(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    if chat_type in [
-     "group",
-     "supergroup"
-]:
-
-    if chat_id not in APPROVED_GROUPS:
-    return
-
     if not update.message:
 
         return
