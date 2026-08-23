@@ -2721,9 +2721,9 @@ async def handle_message(
 ):
 
     if chat_type in [
-       "group",
-       "supergroup"
-       ]:
+     "group",
+     "supergroup"
+]:
 
     if chat_id not in APPROVED_GROUPS:
     return
