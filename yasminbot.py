@@ -191,18 +191,12 @@ threading.Thread(
 # ============================================================
 
 try:
-
-    from gtts import gTTS
-
-    HAS_GTTS = True
+    import edge_tts
+    HAS_EDGE_TTS = True
 
 except Exception as e:
-
-    print(
-        f"[gTTS ERROR]: {e}"
-    )
-
-    HAS_GTTS = False
+    print(f"[EDGE TTS ERROR]: {e}")
+    HAS_EDGE_TTS = False
 
 
 # ============================================================
@@ -1783,42 +1777,38 @@ def ask_openrouter(
 # 22. تحويل النص إلى صوت
 # ============================================================
 
-def text_to_live_voice(
-    text_data
-):
+async def text_to_live_voice(text_data):
 
-    if not HAS_GTTS:
-
+    if not HAS_EDGE_TTS:
         return None
-
 
     try:
 
-        tts = gTTS(
-            text=text_data,
-            lang="ar",
-            slow=False
-        )
+        voice = "ar-SA-ZariyahNeural"
 
+        communicate = edge_tts.Communicate(
+            text_data,
+            voice
+        )
 
         voice_io = io.BytesIO()
 
+        async for chunk in communicate.stream():
 
-        tts.write_to_fp(
-            voice_io
-        )
+            if chunk["type"] == "audio":
 
+                voice_io.write(
+                    chunk["data"]
+                )
 
         voice_io.seek(0)
 
-
         return voice_io
-
 
     except Exception as e:
 
         print(
-            f"[TTS ERROR]: "
+            f"[EDGE TTS ERROR]: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -3393,8 +3383,8 @@ Username:
             )
 
 
-        voice_io = text_to_live_voice(
-            reply_result
+        voice_io = await text_to_live_voice(
+    reply_result
         )
 
 
