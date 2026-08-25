@@ -350,7 +350,7 @@ def key_status_text(provider, keys):
 # ============================================================
 
 user_memory = defaultdict(
-    lambda: deque(maxlen=10)
+    lambda: deque(maxlen=6)
 )
 
 processed_messages = set()
@@ -626,6 +626,7 @@ def group_games_keyboard():
 def solo_games_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✊ حجر ورق مقص", callback_data="game:rps")],
+        [InlineKeyboardButton("🎯 خمن الرقم", callback_data="game:guess"), InlineKeyboardButton("🎲 النرد", callback_data="game:dice")],
         [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
     ])
 
@@ -1612,6 +1613,40 @@ async def _handle_rps(update, context, choice):
         await q.message.reply_text(text, reply_markup=rps_keyboard())
 
 
+# ================================================================
+# 🎮 ألعاب فردية إضافية — بدون AI
+# ================================================================
+
+def solo_guess_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(str(n), callback_data=_act_cb("guess", 0, n)) for n in range(1, 6)],
+        [InlineKeyboardButton("🔄 رقم جديد", callback_data="game:guess")],
+        [InlineKeyboardButton("⬅️ الألعاب الفردية", callback_data="games:solo")],
+    ])
+
+def solo_dice_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 ارمي النرد", callback_data="act:dice:0")],
+        [InlineKeyboardButton("⬅️ الألعاب الفردية", callback_data="games:solo")],
+    ])
+
+async def _handle_guess(update, context, choice):
+    q = update.callback_query
+    try: choice = int(choice)
+    except Exception:
+        await q.answer(); return
+    target = random.randint(1, 5)
+    result = f"🎯 صح! الرقم كان {target}. كفو 😎" if choice == target else f"😅 لا، كان {target}. جرب تاني."
+    await q.answer("🎯 صح!" if choice == target else "😅 غلط")
+    await q.edit_message_text(f"🎯 خمن الرقم من 1 لـ5\n\n{result}", reply_markup=solo_guess_keyboard())
+
+async def _handle_dice(update, context):
+    q = update.callback_query
+    user_roll, bot_roll = random.randint(1, 6), random.randint(1, 6)
+    result = "🏆 كسبت!" if user_roll > bot_roll else ("😅 أنا كسبت." if user_roll < bot_roll else "🤝 تعادل.")
+    await q.answer(result)
+    await q.edit_message_text(f"🎲 إنت: {user_roll} | أنا: {bot_roll}\n{result}", reply_markup=solo_dice_keyboard())
+
 # ----------------------------------------------------------------
 # استقبال الأفعال أثناء اللعب
 # ----------------------------------------------------------------
@@ -1623,6 +1658,14 @@ async def handle_game_action(update, context, action):
 
     if subaction == "rps":
         await _handle_rps(update, context, extra[0] if extra else "")
+        return
+
+    if subaction == "guess":
+        await _handle_guess(update, context, extra[0] if extra else "")
+        return
+
+    if subaction == "dice":
+        await _handle_dice(update, context)
         return
 
     target_raw = extra[0] if extra else None
@@ -1830,6 +1873,16 @@ async def game_callback_router(update, context):
         await q.edit_message_text("🎮 اختار نوع الألعاب:", reply_markup=games_menu_keyboard())
         return
 
+    if data == "game:guess":
+        await q.answer()
+        await q.edit_message_text("🎯 خمن رقم من 1 لـ5\n\nاختار رقم:", reply_markup=solo_guess_keyboard())
+        return
+
+    if data == "game:dice":
+        await q.answer()
+        await q.edit_message_text("🎲 النرد\n\nارمي وأنا أرمي معاك.", reply_markup=solo_dice_keyboard())
+        return
+
     if data == "game:rps":
         await q.answer()
         await q.edit_message_text(
@@ -1898,7 +1951,7 @@ USER_RATE_LIMIT = defaultdict(
     lambda: deque(maxlen=20)
 )
 
-RATE_LIMIT_COUNT = 10
+RATE_LIMIT_COUNT = 6
 RATE_LIMIT_SECONDS = 60
 
 
@@ -3717,7 +3770,8 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("📊 الإحصائيات", callback_data="panel:stats"), InlineKeyboardButton("👥 المستخدمين", callback_data="panel:users")],
         [InlineKeyboardButton("👥 القروبات", callback_data="panel:groups"), InlineKeyboardButton("🧠 الذاكرة", callback_data="panel:memory")],
         [InlineKeyboardButton("📂 اللوق PDF", callback_data="panel:logs"), InlineKeyboardButton("🤖 الخدمات", callback_data="panel:status")],
-        [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")],
+        [InlineKeyboardButton("🧹 مسح ذاكرة القروبات", callback_data="panel:clear_group_memory")],
+        [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")]
         [InlineKeyboardButton("🔄 تحديث", callback_data="panel:home")]
     ])
 
@@ -3932,6 +3986,38 @@ async def admin_panel_callback(update, context):
         current = next((r for r in get_groups() if r[0] == gid), None)
         save_group_record(gid, current[1] if current else "", True)
         await q.answer("تم تشغيل ياسمين في القروب", show_alert=True)
+        return
+
+    if data == "panel:clear_group_memory":
+        try:
+            group_ids = {int(row[0]) for row in get_groups()}
+            removed_ram = 0
+            for key in list(user_memory.keys()):
+                try:
+                    chat_part = int(str(key).split("_", 1)[0])
+                except Exception:
+                    continue
+                if chat_part in group_ids:
+                    user_memory.pop(key, None)
+                    removed_ram += 1
+            with DB_LOCK:
+                conn = sqlite3.connect(DATABASE_FILE)
+                cur = conn.cursor()
+                deleted_db = 0
+                if group_ids:
+                    placeholders = ",".join("?" for _ in group_ids)
+                    cur.execute(f"DELETE FROM conversation_memory WHERE chat_id IN ({placeholders})", tuple(group_ids))
+                    deleted_db = cur.rowcount
+                conn.commit()
+                conn.close()
+            await q.answer("تم مسح ذاكرة القروبات", show_alert=True)
+            await q.edit_message_text(
+                f"🧹 تم مسح ذاكرة القروبات.\n\nRAM: {removed_ram} جلسة\nSQLite: {deleted_db} رسالة ذاكرة\n\nذاكرة الخاص ما اتلمست.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="panel:home")]])
+            )
+        except Exception as e:
+            print(f"[GROUP MEMORY CLEAR ERROR]: {type(e).__name__}: {e}")
+            await q.answer("حصل خطأ أثناء مسح ذاكرة القروبات", show_alert=True)
         return
 
     if data == "panel:memory":
@@ -4295,6 +4381,32 @@ async def handle_message(
 
     elif update.message.caption:
         user_text = update.message.caption.strip()
+
+    # ========================================================
+    # فلترة القروبات مبكراً لتقليل الاستهلاك
+    # الرسائل العادية لا تدخل الذاكرة ولا الـAI.
+    # ========================================================
+    if chat_type in ["group", "supergroup"]:
+        bot_username = (context.bot.username or "Yasmin").lower()
+        is_reply_to_bot_early = bool(
+            update.message.reply_to_message
+            and update.message.reply_to_message.from_user
+            and update.message.reply_to_message.from_user.id == context.bot.id
+        )
+        has_trigger_early = (
+            "ياسمين" in user_text
+            or f"@{bot_username}" in user_text.lower()
+        )
+        is_admin_tool = is_admin and (
+            user_text.strip().lower() in ["لوحة أحمد", "لوحة احمد", "لوحة احمدي"]
+            or is_admin_command(user_text)
+            or context.user_data.get("panel_waiting")
+            or context.user_data.get("broadcast_waiting")
+            or context.user_data.get("admin_target_user")
+            or context.user_data.get("admin_target_group")
+        )
+        if not is_admin_tool and not is_reply_to_bot_early and not has_trigger_early:
+            return
 
     # ========================================================
     # لوحة أحمد / التحكم المباشر — يتحقق النظام من ID أولاً
@@ -4735,9 +4847,10 @@ Username:
 
 لو المستخدم جاد، كوني جادة.
 
-إذا كان السؤال بسيطاً، اختصري.
-
-إذا احتاج السؤال شرحاً، اشرحي بصورة واضحة.
+إذا كان السؤال بسيطاً، اختصري جداً.
+في الونسة العادية خليكِ خفيفة: غالباً جملة أو جملتين، وبحد أقصى 3 أسطر قصيرة.
+ما تكتبي 4 أو 5 أسطر إلا لو السؤال فعلاً محتاج شرح.
+إذا احتاج السؤال شرحاً، اشرحي بصورة واضحة لكن بدون حشو.
 
 لو المستخدم هو المهندس أحمد،
 تعاملي معه كالمبرمج وصاحب البوت،
