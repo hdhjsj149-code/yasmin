@@ -4758,7 +4758,7 @@ Username:
             "[FALLBACK] الانتقال إلى OpenRouter..."
         )
 
-        reply_result = ask_openrouter(
+        reply_result = ask_openai(
             system_prompt,
             conversation_history
         )
