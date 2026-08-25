@@ -221,10 +221,10 @@ GROK_KEYS = [
 # ============================================================
 
 RAW_OPENAI_KEYS = [
-    os.environ.get("OPENAI_API_KEY_1"),
-    os.environ.get("OPENAI_API_KEY_2"),
-    os.environ.get("OPENAI_API_KEY_3"),
-    os.environ.get("OPENAI_API_KEY_4")
+    os.environ.get("OPENROUTER_API_KEY_1"),
+    os.environ.get("OPENROUTER_API_KEY_2"),
+    os.environ.get("OPENROUTER_API_KEY_3"),
+    os.environ.get("OPENROUTER_API_KEY_4")
 ]
 
 OPENAI_KEYS = [
