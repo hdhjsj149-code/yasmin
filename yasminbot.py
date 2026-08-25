@@ -4241,8 +4241,15 @@ async def handle_message(
 
     processed_messages.add(msg_unique_id)
 
-    if len(processed_messages) > 1000:
-        processed_messages.clear()
+    if len(processed_messages) > 5000:
+        # لا نمسح المجموعة كلها دفعة واحدة تحت ضغط القروب.
+        # نحذف جزءاً من العناصر فقط لتقليل احتمال إعادة معالجة
+        # رسالة قديمة أثناء النشاط العالي.
+        for _ in range(2500):
+            try:
+                processed_messages.pop()
+            except KeyError:
+                break
 
     # ========================================================
     # معلومات المستخدم
@@ -4297,6 +4304,70 @@ async def handle_message(
         user_text = update.message.caption.strip()
 
     # ========================================================
+    # 🛑 بوابة القروبات — قبل أي API أو Rate Limit
+    # ========================================================
+    #
+    # القروب النشط قد يرسل آلاف الرسائل. ياسمين تتجاهل الرسائل
+    # العادية فوراً، قبل أي ذكاء اصطناعي أو استهلاك مفاتيح.
+    #
+    # في القروب، الرد مسموح فقط إذا:
+    #   1) الرسالة Reply على رسالة ياسمين
+    #   2) أو ذُكر اسم "ياسمين"
+    #   3) أو ذُكر @username الخاص بالبوت
+    #
+    if chat_type in ["group", "supergroup"]:
+        # هذه العمليات محلية فقط لأغراض الإحصائيات ولوحة الإدارة.
+        save_group_record(
+            chat_id,
+            update.message.chat.title or "قروب بدون اسم",
+            chat_id in APPROVED_GROUPS
+        )
+
+        if user:
+            save_group_member(
+                chat_id,
+                user_id,
+                user_fullname,
+                username
+            )
+
+        # القروب غير الموافق عليه: خروج فوري.
+        if chat_id not in APPROVED_GROUPS:
+            return
+
+        is_reply_to_bot = False
+
+        if update.message.reply_to_message:
+            replied_user = update.message.reply_to_message.from_user
+
+            if replied_user:
+                is_reply_to_bot = (
+                    replied_user.id == context.bot.id
+                )
+
+        bot_username = (
+            context.bot.username
+            or "Yasmin"
+        )
+
+        text_lower = user_text.lower()
+
+        has_name_trigger = "ياسمين" in user_text
+        has_username_trigger = (
+            f"@{bot_username}".lower() in text_lower
+        )
+
+        if not (
+            is_reply_to_bot
+            or has_name_trigger
+            or has_username_trigger
+        ):
+            # 🚨 أهم نقطة: لا Rate Limit ولا API ولا ذاكرة.
+            return
+
+        group_msg_counters[chat_id] += 1
+
+    # ========================================================
     # لوحة أحمد / التحكم المباشر — يتحقق النظام من ID أولاً
     # ========================================================
     if is_admin and user_text.strip().lower() in ["لوحة أحمد", "لوحة احمد", "لوحة احمدي"]:
@@ -4309,7 +4380,6 @@ async def handle_message(
     # ========================================================
     # الأوامر الطبيعية غير المستهلكة للـAPI
     # ========================================================
-
     if wants_commands(user_text):
         await send_commands(
             update,
@@ -4329,7 +4399,6 @@ async def handle_message(
     # ========================================================
     # هل المستخدم داير يلعب؟
     # ========================================================
-
     if game_requested(user_text):
         await show_games_menu(update, context)
         return
@@ -4337,7 +4406,6 @@ async def handle_message(
     # ========================================================
     # هل المستخدم يريد التواصل مع المهندس أحمد؟
     # ========================================================
-
     if (
         wants_admin_contact(user_text)
         and not is_admin
@@ -4365,7 +4433,6 @@ async def handle_message(
     # ========================================================
     # حماية الأوامر الحساسة
     # ========================================================
-
     if (
         is_admin_command(user_text)
         and not is_admin
@@ -4378,7 +4445,8 @@ async def handle_message(
     # ========================================================
     # Rate Limit
     # ========================================================
-
+    # هذا أصبح بعد بوابة القروب، لذلك الرسائل العادية في القروب
+    # لا تستهلك Rate Limit ولا تصل للـAPI.
     if not is_admin:
         if not check_rate_limit(user_id):
             await update.message.reply_text(
@@ -4386,61 +4454,6 @@ async def handle_message(
                 "أدي البوت نفس شوية، "
                 "أرسل بعد دقيقة."
             )
-            return
-
-    # ========================================================
-    # الجروبات
-    # ========================================================
-
-    if chat_type in ["group", "supergroup"]:
-        # سجّل القروب واسمَه وأعضاءه حتى لو كان موقوفاً، عشان لوحة أحمد تكون محدثة.
-        save_group_record(
-            chat_id,
-            update.message.chat.title or "قروب بدون اسم",
-            chat_id in APPROVED_GROUPS
-        )
-        if user:
-            save_group_member(
-                chat_id,
-                user_id,
-                user_fullname,
-                username
-            )
-
-        # لا تعمل ياسمين في القروب إلا بعد موافقة أحمد
-        if chat_id not in APPROVED_GROUPS:
-            return
-
-        group_msg_counters[chat_id] += 1
-
-        is_reply_to_bot = False
-
-        if update.message.reply_to_message:
-            replied_user = (
-                update.message
-                .reply_to_message
-                .from_user
-            )
-
-            if replied_user:
-                is_reply_to_bot = (
-                    replied_user.id == context.bot.id
-                )
-
-        bot_username = (
-            context.bot.username
-            or "Yasmin"
-        )
-
-        has_trigger = (
-            "ياسمين" in user_text
-            or
-            f"@{bot_username}".lower()
-            in user_text.lower()
-        )
-
-        # في القروبات لا يوجد استثناء للأدمن: لازم ذكر ياسمين أو Reply عليها.
-        if not is_reply_to_bot and not has_trigger:
             return
 
     # ========================================================
