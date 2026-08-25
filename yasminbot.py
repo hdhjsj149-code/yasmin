@@ -4744,7 +4744,7 @@ Username:
     if not reply_result:
         print("[FALLBACK] الانتقال إلى Groq...")
 
-        reply_result = ask_groq(
+        reply_result = ask_grok(
             system_prompt,
             conversation_history
         )
