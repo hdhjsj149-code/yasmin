@@ -4250,34 +4250,6 @@ async def handle_message(
 
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
-
-    # ========================================================
-    # فلتر القروبات المبكر: الرسائل العادية لا تدخل أي معالجة
-    # ========================================================
-    if chat_type in ["group", "supergroup"]:
-        bot_username = (context.bot.username or "Yasmin")
-        group_text = (update.message.text or update.message.caption or "").strip()
-        is_reply_to_bot = False
-        if update.message.reply_to_message:
-            replied_user = update.message.reply_to_message.from_user
-            if replied_user:
-                is_reply_to_bot = replied_user.id == context.bot.id
-        has_trigger = (
-            "ياسمين" in group_text
-            or f"@{bot_username}".lower() in group_text.lower()
-        )
-        # الأوامر/الطلبات النصية المحلية تظل شغالة بدون AI
-        local_command = (
-            wants_commands(group_text)
-            or wants_adhkar(group_text)
-            or game_requested(group_text)
-            or wants_admin_contact(group_text)
-            or is_admin_command(group_text)
-        )
-
-        if not is_reply_to_bot and not has_trigger and not local_command:
-            return
-
     user = update.message.from_user
 
     user_id = (
