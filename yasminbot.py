@@ -626,6 +626,7 @@ def group_games_keyboard():
 def solo_games_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✊ حجر ورق مقص", callback_data="game:rps")],
+        [InlineKeyboardButton("🎲 ألعاب النرد المتحركة", callback_data="games:dice")],
         [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
     ])
 
@@ -691,6 +692,7 @@ def _new_session(chat_id, game_type, host):
         "data": {},
         "round": 0,
         "last_activity": time.time(),
+        "msgs_since_prompt": 0,
     }
 
 
@@ -729,6 +731,14 @@ def _lobby_text(session):
     return "\n".join(lines)
 
 
+# ----------------------------------------------------------------
+# أدوار معلّقة: لاعبين ما بدأوا محادثة خاصة مع ياسمين قبل كده،
+# فشل إرسال دورهم السري ليهم. أول رسالة يبعتوها في الخاص، دورهم
+# يوصلهم تلقائي والقروب يتبلغ إنهم دخلوا.
+# ----------------------------------------------------------------
+PENDING_ROLE_DELIVERY = {}
+
+
 async def _send_private(context, user_id, text, reply_markup=None):
     try:
         await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
@@ -739,11 +749,12 @@ async def _send_private(context, user_id, text, reply_markup=None):
 
 async def _announce(context, chat_id, text, reply_markup=None):
     try:
-        await context.bot.send_message(
+        return await context.bot.send_message(
             chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup
         )
     except Exception as e:
         print(f"[GAME ANNOUNCE ERROR]: {type(e).__name__}: {e}")
+        return None
 
 
 def _finish_session(chat_id):
@@ -816,6 +827,7 @@ async def join_current_game(update, context):
             "alive": True,
         }
         _touch(session)
+        session["msgs_since_prompt"] = 0
         text = _lobby_text(session)
 
     await q.answer("انضميت! 🎮")
@@ -907,7 +919,7 @@ async def _begin_game(update, context):
 
     # إرسال الأدوار في الخاص لو اللعبة عندها أدوار سرية فردية
     if session["type"] in ("mafia", "spaceship", "masks", "handeel"):
-        failed_dm = []
+        failed_players = []
         for uid, role in session["roles"].items():
             if session["type"] == "masks":
                 info = "حافظ على هويتك سرية، راقب تصرفات الباقين، وحاول ما تنطلع بالتصويت."
@@ -919,13 +931,28 @@ async def _begin_game(update, context):
             role_text += "ما ترسل دورك للناس في القروب."
             ok = await _send_private(context, uid, role_text)
             if not ok:
-                failed_dm.append(uid)
-        if failed_dm:
-            names = ", ".join(session["players"][uid]["name"] for uid in failed_dm)
-            await q.message.reply_text(
-                f"⚠️ ما قدرت أبعت رسالة خاصة لـ: {names}\n"
-                "لازم يبدأوا محادثة خاصة معايا أول مرة عشان أقدر أبعت لهم أدوارهم."
+                # نخزن الدور عشان يوصله أول ما يفتح خاص مع ياسمين
+                PENDING_ROLE_DELIVERY[uid] = {
+                    "chat_id": chat_id,
+                    "role_text": role_text,
+                    "player_name": session["players"][uid]["name"],
+                }
+                failed_players.append(uid)
+
+        if failed_players:
+            mentions = ", ".join(
+                f'<a href="tg://user?id={uid}">{session["players"][uid]["name"]}</a>'
+                for uid in failed_players
             )
+            try:
+                await q.message.reply_text(
+                    f"⚠️ {mentions} لازم يدخلوا الخاص معايا الأول.\n\n"
+                    "روحوا لـ ياسمين في الخاص واكتبوا أي حاجة (مثلاً «ابدأ») "
+                    "وحيوصلكم دوركم في اللعبة فوراً 🔐",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                print(f"[ROLE MENTION ERROR]: {e}")
 
     await _start_round(update, context, session)
 
@@ -1037,6 +1064,9 @@ async def _mafia_resolve_night(context, session):
     data = session["data"]["night"]
     chat_id = session["chat_id"]
 
+    await _announce(context, chat_id, "🌙 ياسمين بتلملم أحداث الليلة... 🔎")
+    await asyncio.sleep(1.8)
+
     votes = list(data["mafia_votes"].values())
     votes = [v for v in votes if v != "skip"]
     target = None
@@ -1083,16 +1113,22 @@ async def _mafia_resolve_night(context, session):
     _touch(session)
 
     alive = _alive_players(session)
-    await _announce(
+    vote_msg = await _announce(
         context, chat_id,
-        "🗳️ صوّتوا على مين تحسوا إنه المافيا:",
+        f"🗳️ صوّتوا على مين تحسوا إنه المافيا:\n\n⏳ 0/{len(alive)} صوّتوا لحد الآن.",
         _players_keyboard("mvote", chat_id, alive, include_skip=True),
     )
+    if vote_msg:
+        session["data"]["day_vote_msg_id"] = vote_msg.message_id
+        session["data"]["day_vote_chat_id"] = chat_id
 
 
 async def _mafia_resolve_day(context, session):
     data = session["data"]["day_votes"]
     chat_id = session["chat_id"]
+
+    await _announce(context, chat_id, "⏳ اكتمل التصويت... ياسمين بتعد الأصوات 🗳️")
+    await asyncio.sleep(1.8)
 
     votes = [v for v in data.values() if v != "skip"]
     lines = [f"🗳️ *نتيجة التصويت — الجولة {session['round']}*", ""]
@@ -1613,6 +1649,97 @@ async def _handle_rps(update, context, choice):
 
 
 # ----------------------------------------------------------------
+# 🎲 ألعاب النرد المتحركة (أنيميشن تيليجرام الأصلي)
+# ----------------------------------------------------------------
+# هذي رسائل نرد/دارتس/سلة/كورة/بولينج/سلوت بتتحرك فعلياً في
+# تليجرام (مو صورة ثابتة) — إنت ضد ياسمين، الأعلى رقم يكسب.
+
+DICE_GAMES = {
+    "dice":       {"emoji": "🎲", "name": "نرد",     "max": 6},
+    "darts":      {"emoji": "🎯", "name": "دارتس",   "max": 6},
+    "basketball": {"emoji": "🏀", "name": "سلة",      "max": 5},
+    "football":   {"emoji": "⚽", "name": "كورة",     "max": 5},
+    "bowling":    {"emoji": "🎳", "name": "بولينج",   "max": 6},
+    "slot":       {"emoji": "🎰", "name": "سلوت",     "max": 64},
+}
+
+
+def dice_games_keyboard():
+    rows = []
+    row = []
+    for key, g in DICE_GAMES.items():
+        row.append(
+            InlineKeyboardButton(
+                f"{g['emoji']} {g['name']}",
+                callback_data=_act_cb("dice", 0, key)
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def dice_result_keyboard(key):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔁 تاني", callback_data=_act_cb("dice", 0, key)),
+        InlineKeyboardButton("⬅️ رجوع", callback_data="games:back"),
+    ]])
+
+
+async def _handle_dice_duel(update, context, key):
+    q = update.callback_query
+    game = DICE_GAMES.get(key)
+
+    if not game:
+        await q.answer()
+        return
+
+    chat_id = q.message.chat_id
+    await q.answer("🎲 يلا نرمي!")
+
+    try:
+        await q.edit_message_text(f"{game['emoji']} جاهز؟ إنت ضد ياسمين...")
+    except Exception:
+        pass
+
+    # رمية المستخدم (تظهر متحركة في الشات)
+    user_roll = await context.bot.send_dice(
+        chat_id=chat_id, emoji=game["emoji"]
+    )
+    await asyncio.sleep(3.2)  # وقت الأنيميشن عشان القيمة تكون واضحة
+
+    # رمية ياسمين
+    bot_roll = await context.bot.send_dice(
+        chat_id=chat_id, emoji=game["emoji"]
+    )
+    await asyncio.sleep(3.2)
+
+    user_val = user_roll.dice.value
+    bot_val = bot_roll.dice.value
+
+    if key == "slot":
+        # في السلوت أي قيمة عالية/متطابقة = حظ حلو، بنقارن القيم برضو
+        pass
+
+    if user_val > bot_val:
+        result = f"🎉 كسبت! ({user_val} مقابل {bot_val})"
+    elif user_val < bot_val:
+        result = f"😅 خسرت! ({user_val} مقابل {bot_val})"
+    else:
+        result = f"🤝 تعادل! ({user_val} مقابل {bot_val})"
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"{game['emoji']} النتيجة:\n\n{result}\n\nتحب تلعب تاني؟",
+        reply_markup=dice_result_keyboard(key),
+    )
+
+
+# ----------------------------------------------------------------
 # استقبال الأفعال أثناء اللعب
 # ----------------------------------------------------------------
 
@@ -1623,6 +1750,10 @@ async def handle_game_action(update, context, action):
 
     if subaction == "rps":
         await _handle_rps(update, context, extra[0] if extra else "")
+        return
+
+    if subaction == "dice":
+        await _handle_dice_duel(update, context, extra[0] if extra else "")
         return
 
     target_raw = extra[0] if extra else None
@@ -1679,6 +1810,28 @@ async def handle_game_action(update, context, action):
                 target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
                 session["data"]["day_votes"][user_id] = target
                 await q.answer("🗳️ سجلت تصويتك.")
+
+                # تحديث حي لعدد المصوتين في نفس الرسالة — يخلق تشويق
+                # وحركة بدل ما الكل يستنى بصمت لحد ما النتيجة تطلع.
+                alive_now = _alive_players(session)
+                voted_count = len(session["data"]["day_votes"])
+                vmsg_id = session["data"].get("day_vote_msg_id")
+                vchat_id = session["data"].get("day_vote_chat_id")
+                if vmsg_id and vchat_id:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=vchat_id,
+                            message_id=vmsg_id,
+                            text=(
+                                "🗳️ صوّتوا على مين تحسوا إنه المافيا:\n\n"
+                                f"⏳ {voted_count}/{len(alive_now)} صوّتوا لحد الآن..."
+                            ),
+                            reply_markup=_players_keyboard(
+                                "mvote", chat_id, alive_now, include_skip=True
+                            ),
+                        )
+                    except Exception:
+                        pass
             elif subaction == "mforce":
                 if user_id != session["host_id"]:
                     await q.answer("بس صاحب اللعبة يقدر يفرض الانتقال.", show_alert=True)
@@ -1840,6 +1993,16 @@ async def game_callback_router(update, context):
         )
         return
 
+    if data == "games:dice":
+        await q.answer()
+        await q.edit_message_text(
+            "🎲 *ألعاب النرد المتحركة*\n\n"
+            "اختار لعبة، وشوف الأنيميشن الحقيقي وإنت بتلعب ضد ياسمين — الأعلى رقم يكسب 🔥",
+            parse_mode="Markdown",
+            reply_markup=dice_games_keyboard(),
+        )
+        return
+
     if data.startswith("game:") and data[5:] in GAME_RULES:
         await start_game_lobby(update, context, data[5:])
         return
@@ -1985,6 +2148,27 @@ def init_database():
                     last_seen TEXT,
                     message_count INTEGER DEFAULT 0,
                     PRIMARY KEY (chat_id, user_id)
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS custom_replies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trigger_word TEXT NOT NULL,
+                    reply_text TEXT NOT NULL,
+                    created_at TEXT
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vip_users (
+                    user_id INTEGER PRIMARY KEY,
+                    full_name TEXT,
+                    added_at TEXT
                 )
                 """
             )
@@ -2455,6 +2639,11 @@ def match_fixed_reply(text):
             if trigger in normalized:
                 return random.choice(item["replies"])
 
+    # الردود المخصصة المضافة من اللوحة الثانية
+    for item in CUSTOM_REPLIES:
+        if item["trigger"].strip().lower() in normalized:
+            return item["reply"]
+
     return None
 
 
@@ -2531,7 +2720,28 @@ CONTACT_WORDS = [
     "عاوز اكلمك",
     "داير اكلمك",
     "كيف اتواصل مع احمد",
-    "كيف اتواصل مع أحمد"
+    "كيف اتواصل مع أحمد",
+    # عبارات عامة من غير ذكر اسم أحمد صراحة
+    "دايرني",
+    "داير يوصلني",
+    "داير يوصل لي",
+    "داير يعرف عني",
+    "زول سألني",
+    "زول سأل عني",
+    "زول سال عني",
+    "زول سالني",
+    "زول داير",
+    "في زول دايرني",
+    "في زول داير",
+    "مين دايرني",
+    "قوليلو دايرو",
+    "قوليله دايره",
+    "ابلغه عني",
+    "ابلغيه عني",
+    "ابلغو دايرني",
+    "خليه يعرف اني",
+    "خبريه اني",
+    "وصليه اني داير"
 ]
 
 
@@ -3880,6 +4090,150 @@ def update_group_title(chat_id, title):
 load_approved_groups()
 
 
+# ============================================================
+# الردود المخصصة (تُضاف من اللوحة الثانية) — تُحمّل في الذاكرة
+# عشان ما نضرب SQLite على كل رسالة.
+# ============================================================
+
+CUSTOM_REPLIES = []  # [{"id": int, "trigger": str, "reply": str}, ...]
+
+
+def load_custom_replies():
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            rows = conn.execute(
+                "SELECT id, trigger_word, reply_text FROM custom_replies ORDER BY id"
+            ).fetchall()
+            conn.close()
+        CUSTOM_REPLIES.clear()
+        for rid, trig, rep in rows:
+            CUSTOM_REPLIES.append({"id": rid, "trigger": trig, "reply": rep})
+    except Exception as e:
+        print(f"[CUSTOM REPLIES LOAD ERROR]: {e}")
+
+
+def add_custom_reply(trigger_word, reply_text):
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        cur = conn.execute(
+            "INSERT INTO custom_replies (trigger_word, reply_text, created_at) VALUES (?, ?, ?)",
+            (trigger_word, reply_text, now)
+        )
+        new_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+    CUSTOM_REPLIES.append({"id": new_id, "trigger": trigger_word, "reply": reply_text})
+    return new_id
+
+
+def delete_custom_reply(reply_id):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        conn.execute("DELETE FROM custom_replies WHERE id=?", (reply_id,))
+        conn.commit()
+        conn.close()
+    CUSTOM_REPLIES[:] = [r for r in CUSTOM_REPLIES if r["id"] != reply_id]
+
+
+load_custom_replies()
+
+
+# ============================================================
+# الأصدقاء المميزون (VIP) — معاملة خاصة: بدون Rate Limit وبدون
+# الحاجة لنداء اسم ياسمين في القروب.
+# ============================================================
+
+VIP_USERS = set()
+
+
+def load_vip_users():
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            rows = conn.execute("SELECT user_id FROM vip_users").fetchall()
+            conn.close()
+        VIP_USERS.update(row[0] for row in rows)
+    except Exception as e:
+        print(f"[VIP LOAD ERROR]: {e}")
+
+
+def add_vip_user(user_id, full_name):
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        conn.execute(
+            "INSERT OR REPLACE INTO vip_users (user_id, full_name, added_at) VALUES (?, ?, ?)",
+            (user_id, full_name, now)
+        )
+        conn.commit()
+        conn.close()
+    VIP_USERS.add(user_id)
+
+
+def remove_vip_user(user_id):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        conn.execute("DELETE FROM vip_users WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+    VIP_USERS.discard(user_id)
+
+
+def get_vip_users():
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            "SELECT user_id, full_name, added_at FROM vip_users ORDER BY added_at DESC"
+        ).fetchall()
+        conn.close()
+    return rows
+
+
+load_vip_users()
+
+
+# ============================================================
+# سجلات الخاص لكل شخص على حدة (من conversation_memory)
+# ============================================================
+
+def get_private_chat_users(limit=200):
+    """يرجّع كل الأشخاص اللي دخلوا خاص مع ياسمين وليهم رسائل محفوظة."""
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            """
+            SELECT DISTINCT cm.user_id, u.full_name, u.username
+            FROM conversation_memory cm
+            LEFT JOIN users u ON u.user_id = cm.user_id
+            WHERE cm.chat_id = cm.user_id
+            ORDER BY cm.user_id DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+        conn.close()
+    return rows
+
+
+def get_private_log_for_user(user_id, limit=200):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM conversation_memory
+            WHERE chat_id = ? AND user_id = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (user_id, user_id, limit)
+        ).fetchall()
+        conn.close()
+    return rows
+
+
 def make_pdf_log():
     """إنشاء PDF للوق مباشرة في الذاكرة حتى يشتغل زر اللوق من لوحة أحمد."""
     try:
@@ -3938,8 +4292,151 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("👥 القروبات", callback_data="panel:groups"), InlineKeyboardButton("🧠 الذاكرة", callback_data="panel:memory")],
         [InlineKeyboardButton("📂 اللوق PDF", callback_data="panel:logs"), InlineKeyboardButton("🤖 الخدمات", callback_data="panel:status")],
         [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")],
+        [InlineKeyboardButton("⚙️ لوحة ياسمين (ردود/VIP/سجلات)", callback_data="panel2:home")],
         [InlineKeyboardButton("🔄 تحديث", callback_data="panel:home")]
     ])
+
+
+# ============================================================
+# 🌸 لوحة ياسمين (اللوحة الثانية) — ردود جاهزة + VIP + سجلات خاص
+# ============================================================
+
+def panel2_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 الردود الجاهزة", callback_data="panel2:replies")],
+        [InlineKeyboardButton("⭐ الأصدقاء المميزين (VIP)", callback_data="panel2:vip")],
+        [InlineKeyboardButton("📂 سجلات الخاص", callback_data="panel2:logs")],
+        [InlineKeyboardButton("⬅️ رجوع للوحة أحمد", callback_data="panel:home")],
+    ])
+
+
+async def show_panel2(update, context):
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        return False
+    text = (
+        "🌸 لوحة ياسمين\n\n"
+        "من هنا تتحكم في الردود الجاهزة، الأصدقاء المميزين (VIP)، "
+        "وتقدر تفتح سجل خاص أي شخص لوحده."
+    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=panel2_keyboard())
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=panel2_keyboard())
+    return True
+
+
+async def panel2_callback(update, context):
+    q = update.callback_query
+    if not q:
+        return
+    if q.from_user.id != ADMIN_ID:
+        await q.answer("ما عندك صلاحية 😅", show_alert=True)
+        return
+    await q.answer()
+    data = q.data or ""
+
+    if data == "panel2:home":
+        return await show_panel2(update, context)
+
+    # ---------------- الردود الجاهزة ----------------
+    if data == "panel2:replies":
+        lines = [f"💬 الردود الجاهزة\n\n📌 أساسية (من الكود): {len(FIXED_REPLIES)}\n📌 مضافة من اللوحة: {len(CUSTOM_REPLIES)}\n"]
+        buttons = []
+        if not CUSTOM_REPLIES:
+            lines.append("ما فيه ردود مضافة من اللوحة لسه.")
+        for item in CUSTOM_REPLIES[:30]:
+            lines.append(f"• «{item['trigger']}» → {item['reply'][:40]}")
+            buttons.append([InlineKeyboardButton(f"🗑 حذف: {item['trigger'][:20]}", callback_data=f"panel2:delreply:{item['id']}")])
+        buttons.append([InlineKeyboardButton("➕ إضافة رد جديد", callback_data="panel2:addreply")])
+        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel2:addreply":
+        context.user_data["panel_waiting"] = "add_reply"
+        await q.edit_message_text(
+            "➕ إضافة رد جاهز جديد\n\n"
+            "اكتب بالشكل ده بالضبط (سطر واحد، والفاصل | ):\n\n"
+            "الكلمة المفتاحية | الرد\n\n"
+            "مثال:\nكيف الجو | الجو حلو اليوم الحمدلله ☀️",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel2:replies")]])
+        )
+        return
+
+    if data.startswith("panel2:delreply:"):
+        rid = int(data.split(":")[-1])
+        delete_custom_reply(rid)
+        await q.answer("تم حذف الرد", show_alert=True)
+        return
+
+    # ---------------- VIP ----------------
+    if data == "panel2:vip":
+        rows = get_vip_users()
+        lines = [f"⭐ الأصدقاء المميزين ({len(rows)})\n"]
+        buttons = []
+        for uid, name, added_at in rows:
+            lines.append(f"• {name or 'بدون اسم'} | ID: {uid}")
+            buttons.append([InlineKeyboardButton(f"🗑 إزالة: {(name or str(uid))[:20]}", callback_data=f"panel2:vipdel:{uid}")])
+        if not rows:
+            lines.append("ما فيه أصدقاء مميزين مضافين لسه.")
+        buttons.append([InlineKeyboardButton("➕ إضافة صديق مميز", callback_data="panel2:vipadd")])
+        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel2:vipadd":
+        context.user_data["panel_waiting"] = "add_vip"
+        await q.edit_message_text(
+            "➕ إضافة صديق مميز\n\n"
+            "ابعت الآن الـID بتاعه (رقم)، أو حوّل ليّا رسالة منه هنا وأنا حاخد الـID تلقائياً.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel2:vip")]])
+        )
+        return
+
+    if data.startswith("panel2:vipdel:"):
+        uid = int(data.split(":")[-1])
+        remove_vip_user(uid)
+        await q.answer("تم إزالة الصفة المميزة", show_alert=True)
+        return
+
+    # ---------------- سجلات الخاص ----------------
+    if data == "panel2:logs":
+        rows = get_private_chat_users(100)
+        lines = ["📂 سجلات الخاص — الأشخاص اللي دخلوا خاص\n"]
+        buttons = []
+        for uid, name, username in rows:
+            label = name or "مستخدم"
+            if username:
+                label += f" @{username}"
+            lines.append(f"• {label} | ID: {uid}")
+            buttons.append([InlineKeyboardButton(f"📄 {(name or str(uid))[:22]}", callback_data=f"panel2:userlog:{uid}")])
+        if not rows:
+            lines.append("ما فيه محادثات خاصة محفوظة لسه.")
+        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("panel2:userlog:"):
+        uid = int(data.split(":")[-1])
+        rows = get_private_log_for_user(uid, 100)
+        if not rows:
+            await q.answer("ما فيه رسائل محفوظة لهذا الشخص.", show_alert=True)
+            return
+        lines = [f"📄 سجل الخاص — ID: {uid}\n"]
+        for role, content, created_at in rows:
+            who = "👤 المستخدم" if role == "user" else "🌸 ياسمين"
+            snippet = content if len(content) <= 300 else content[:300] + "…"
+            lines.append(f"[{created_at}] {who}:\n{snippet}\n")
+        full_text = "\n".join(lines)
+        # تليجرام بيرفض الرسائل الطويلة جداً، فبنقص لآخر جزء لو النص كبير.
+        if len(full_text) > 3800:
+            full_text = "…(مقتطع، آخر جزء من السجل)…\n\n" + full_text[-3800:]
+        await q.edit_message_text(
+            full_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:logs")]])
+        )
+        return
 
 
 async def show_admin_panel(update, context):
@@ -4257,6 +4754,49 @@ async def handle_admin_direct_message(update, context):
         )
         return True
 
+    # إضافة رد جاهز جديد من اللوحة الثانية
+    if context.user_data.get("panel_waiting") == "add_reply" and text:
+        context.user_data.pop("panel_waiting", None)
+        if "|" not in text:
+            await update.message.reply_text(
+                "❌ الصيغة غلط. لازم يكون فيه | بين الكلمة المفتاحية والرد.\n"
+                "مثال: كيف الجو | الجو حلو اليوم ☀️"
+            )
+            return True
+        trig, rep = text.split("|", 1)
+        trig = trig.strip().lower()
+        rep = rep.strip()
+        if not trig or not rep:
+            await update.message.reply_text("❌ لازم الكلمة المفتاحية والرد يكونوا فيهم نص.")
+            return True
+        add_custom_reply(trig, rep)
+        await update.message.reply_text(f"✅ تمت إضافة الرد.\n\nالكلمة: {trig}\nالرد: {rep}")
+        return True
+
+    # إضافة صديق مميز (VIP) جديد من اللوحة الثانية
+    if context.user_data.get("panel_waiting") == "add_vip":
+        forwarded_user = getattr(update.message, "forward_from", None)
+        if forwarded_user:
+            context.user_data.pop("panel_waiting", None)
+            add_vip_user(forwarded_user.id, forwarded_user.full_name)
+            await update.message.reply_text(
+                f"✅ {forwarded_user.full_name} بقى صديق مميز الآن ⭐"
+            )
+            return True
+        if text and text.strip().isdigit():
+            context.user_data.pop("panel_waiting", None)
+            uid = int(text.strip())
+            profile = get_user_profile(uid)
+            name = profile[0] if profile else str(uid)
+            add_vip_user(uid, name)
+            await update.message.reply_text(f"✅ {name} بقى صديق مميز الآن ⭐")
+            return True
+        if text:
+            await update.message.reply_text(
+                "❌ ابعت رقم الـID بس (أرقام فقط)، أو حوّل ليّا رسالة من الشخص مباشرة."
+            )
+            return True
+
     target_user = context.user_data.pop("admin_target_user", None)
     target_group = context.user_data.pop("admin_target_group", None)
 
@@ -4479,6 +5019,7 @@ async def handle_message(
     )
 
     is_admin = is_admin_user(user_id)
+    is_vip = user_id in VIP_USERS
 
     user_fullname = (
         user.full_name
@@ -4517,10 +5058,36 @@ async def handle_message(
         user_text = update.message.caption.strip()
 
     # ========================================================
+    # تسليم دور معلّق (لاعب دخل الخاص لأول مرة بعد ما فشل إرسال دوره)
+    # ========================================================
+
+    if chat_type == "private" and user_id in PENDING_ROLE_DELIVERY:
+        pending = PENDING_ROLE_DELIVERY.pop(user_id)
+
+        try:
+            await update.message.reply_text(pending["role_text"])
+        except Exception as e:
+            print(f"[PENDING ROLE SEND ERROR]: {e}")
+
+        try:
+            await context.bot.send_message(
+                chat_id=pending["chat_id"],
+                text=f"✅ {pending['player_name']} دخل الخاص واستلم دوره، اللعبة مستمرة 🎮",
+            )
+        except Exception as e:
+            print(f"[PENDING ROLE ANNOUNCE ERROR]: {e}")
+
+        return
+
+    # ========================================================
     # لوحة أحمد / التحكم المباشر — يتحقق النظام من ID أولاً
     # ========================================================
     if is_admin and user_text.strip().lower() in ["لوحة أحمد", "لوحة احمد", "لوحة احمدي"]:
         await show_admin_panel(update, context)
+        return
+
+    if is_admin and user_text.strip().lower() in ["لوحة ياسمين", "اللوحة الثانية", "لوحة الردود"]:
+        await show_panel2(update, context)
         return
 
     if is_admin and await handle_admin_direct_message(update, context):
@@ -4555,6 +5122,31 @@ async def handle_message(
             return
 
         group_msg_counters[chat_id] += 1
+
+        # ------------------------------------------------------
+        # لو في ردهة لعبة مفتوحة (لسه ما بدأت) وزحمة رسائل القروب
+        # دفنتها فوق، نعيد نشرها تاني في الأسفل عشان الناس تلقاها.
+        # ------------------------------------------------------
+        LOBBY_REPOST_AFTER = 15
+
+        active_session = GAME_SESSIONS.get(game_key(chat_id))
+        if active_session and active_session.get("status") == "lobby":
+            active_session["msgs_since_prompt"] = (
+                active_session.get("msgs_since_prompt", 0) + 1
+            )
+            if active_session["msgs_since_prompt"] >= LOBBY_REPOST_AFTER:
+                active_session["msgs_since_prompt"] = 0
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "🔔 تذكير: في لعبة لسه فاتحة للانضمام 👇\n\n"
+                            + _lobby_text(active_session)
+                        ),
+                        reply_markup=game_lobby_keyboard(),
+                    )
+                except Exception as e:
+                    print(f"[LOBBY REPOST ERROR]: {e}")
 
         if update.message.reply_to_message:
             replied_user = (
@@ -4598,10 +5190,12 @@ async def handle_message(
 
     # في القروبات: لازم ذكر ياسمين أو Reply عليها عشان أي معالجة
     # تانية (أوامر/أذكار/ألعاب/تواصل/Rate Limit/AI) تكمل.
+    # استثناء: الأصدقاء المميزين (VIP) — ياسمين تسمع كلامهم دايماً.
     if (
         chat_type in ["group", "supergroup"]
         and not is_reply_to_bot
         and not has_trigger
+        and not is_vip
     ):
         return
 
@@ -4678,7 +5272,7 @@ async def handle_message(
     # Rate Limit
     # ========================================================
 
-    if not is_admin:
+    if not is_admin and not is_vip:
         if not check_rate_limit(user_id):
             await update.message.reply_text(
                 "يا حبيبنا 😂 "
@@ -5214,6 +5808,13 @@ if __name__ == "__main__":
         CallbackQueryHandler(
             admin_panel_callback,
             pattern=r"^panel:"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            panel2_callback,
+            pattern=r"^panel2:"
         )
     )
 
