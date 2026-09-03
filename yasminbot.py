@@ -626,7 +626,6 @@ def group_games_keyboard():
 def solo_games_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✊ حجر ورق مقص", callback_data="game:rps")],
-        [InlineKeyboardButton("🎲 ألعاب النرد المتحركة", callback_data="games:dice")],
         [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
     ])
 
@@ -692,7 +691,6 @@ def _new_session(chat_id, game_type, host):
         "data": {},
         "round": 0,
         "last_activity": time.time(),
-        "msgs_since_prompt": 0,
     }
 
 
@@ -731,14 +729,6 @@ def _lobby_text(session):
     return "\n".join(lines)
 
 
-# ----------------------------------------------------------------
-# أدوار معلّقة: لاعبين ما بدأوا محادثة خاصة مع ياسمين قبل كده،
-# فشل إرسال دورهم السري ليهم. أول رسالة يبعتوها في الخاص، دورهم
-# يوصلهم تلقائي والقروب يتبلغ إنهم دخلوا.
-# ----------------------------------------------------------------
-PENDING_ROLE_DELIVERY = {}
-
-
 async def _send_private(context, user_id, text, reply_markup=None):
     try:
         await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
@@ -749,12 +739,11 @@ async def _send_private(context, user_id, text, reply_markup=None):
 
 async def _announce(context, chat_id, text, reply_markup=None):
     try:
-        return await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup
         )
     except Exception as e:
         print(f"[GAME ANNOUNCE ERROR]: {type(e).__name__}: {e}")
-        return None
 
 
 def _finish_session(chat_id):
@@ -827,7 +816,6 @@ async def join_current_game(update, context):
             "alive": True,
         }
         _touch(session)
-        session["msgs_since_prompt"] = 0
         text = _lobby_text(session)
 
     await q.answer("انضميت! 🎮")
@@ -919,7 +907,7 @@ async def _begin_game(update, context):
 
     # إرسال الأدوار في الخاص لو اللعبة عندها أدوار سرية فردية
     if session["type"] in ("mafia", "spaceship", "masks", "handeel"):
-        failed_players = []
+        failed_dm = []
         for uid, role in session["roles"].items():
             if session["type"] == "masks":
                 info = "حافظ على هويتك سرية، راقب تصرفات الباقين، وحاول ما تنطلع بالتصويت."
@@ -931,28 +919,13 @@ async def _begin_game(update, context):
             role_text += "ما ترسل دورك للناس في القروب."
             ok = await _send_private(context, uid, role_text)
             if not ok:
-                # نخزن الدور عشان يوصله أول ما يفتح خاص مع ياسمين
-                PENDING_ROLE_DELIVERY[uid] = {
-                    "chat_id": chat_id,
-                    "role_text": role_text,
-                    "player_name": session["players"][uid]["name"],
-                }
-                failed_players.append(uid)
-
-        if failed_players:
-            mentions = ", ".join(
-                f'<a href="tg://user?id={uid}">{session["players"][uid]["name"]}</a>'
-                for uid in failed_players
+                failed_dm.append(uid)
+        if failed_dm:
+            names = ", ".join(session["players"][uid]["name"] for uid in failed_dm)
+            await q.message.reply_text(
+                f"⚠️ ما قدرت أبعت رسالة خاصة لـ: {names}\n"
+                "لازم يبدأوا محادثة خاصة معايا أول مرة عشان أقدر أبعت لهم أدوارهم."
             )
-            try:
-                await q.message.reply_text(
-                    f"⚠️ {mentions} لازم يدخلوا الخاص معايا الأول.\n\n"
-                    "روحوا لـ ياسمين في الخاص واكتبوا أي حاجة (مثلاً «ابدأ») "
-                    "وحيوصلكم دوركم في اللعبة فوراً 🔐",
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                print(f"[ROLE MENTION ERROR]: {e}")
 
     await _start_round(update, context, session)
 
@@ -1064,9 +1037,6 @@ async def _mafia_resolve_night(context, session):
     data = session["data"]["night"]
     chat_id = session["chat_id"]
 
-    await _announce(context, chat_id, "🌙 ياسمين بتلملم أحداث الليلة... 🔎")
-    await asyncio.sleep(1.8)
-
     votes = list(data["mafia_votes"].values())
     votes = [v for v in votes if v != "skip"]
     target = None
@@ -1113,22 +1083,16 @@ async def _mafia_resolve_night(context, session):
     _touch(session)
 
     alive = _alive_players(session)
-    vote_msg = await _announce(
+    await _announce(
         context, chat_id,
-        f"🗳️ صوّتوا على مين تحسوا إنه المافيا:\n\n⏳ 0/{len(alive)} صوّتوا لحد الآن.",
+        "🗳️ صوّتوا على مين تحسوا إنه المافيا:",
         _players_keyboard("mvote", chat_id, alive, include_skip=True),
     )
-    if vote_msg:
-        session["data"]["day_vote_msg_id"] = vote_msg.message_id
-        session["data"]["day_vote_chat_id"] = chat_id
 
 
 async def _mafia_resolve_day(context, session):
     data = session["data"]["day_votes"]
     chat_id = session["chat_id"]
-
-    await _announce(context, chat_id, "⏳ اكتمل التصويت... ياسمين بتعد الأصوات 🗳️")
-    await asyncio.sleep(1.8)
 
     votes = [v for v in data.values() if v != "skip"]
     lines = [f"🗳️ *نتيجة التصويت — الجولة {session['round']}*", ""]
@@ -1649,97 +1613,6 @@ async def _handle_rps(update, context, choice):
 
 
 # ----------------------------------------------------------------
-# 🎲 ألعاب النرد المتحركة (أنيميشن تيليجرام الأصلي)
-# ----------------------------------------------------------------
-# هذي رسائل نرد/دارتس/سلة/كورة/بولينج/سلوت بتتحرك فعلياً في
-# تليجرام (مو صورة ثابتة) — إنت ضد ياسمين، الأعلى رقم يكسب.
-
-DICE_GAMES = {
-    "dice":       {"emoji": "🎲", "name": "نرد",     "max": 6},
-    "darts":      {"emoji": "🎯", "name": "دارتس",   "max": 6},
-    "basketball": {"emoji": "🏀", "name": "سلة",      "max": 5},
-    "football":   {"emoji": "⚽", "name": "كورة",     "max": 5},
-    "bowling":    {"emoji": "🎳", "name": "بولينج",   "max": 6},
-    "slot":       {"emoji": "🎰", "name": "سلوت",     "max": 64},
-}
-
-
-def dice_games_keyboard():
-    rows = []
-    row = []
-    for key, g in DICE_GAMES.items():
-        row.append(
-            InlineKeyboardButton(
-                f"{g['emoji']} {g['name']}",
-                callback_data=_act_cb("dice", 0, key)
-            )
-        )
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")])
-    return InlineKeyboardMarkup(rows)
-
-
-def dice_result_keyboard(key):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔁 تاني", callback_data=_act_cb("dice", 0, key)),
-        InlineKeyboardButton("⬅️ رجوع", callback_data="games:back"),
-    ]])
-
-
-async def _handle_dice_duel(update, context, key):
-    q = update.callback_query
-    game = DICE_GAMES.get(key)
-
-    if not game:
-        await q.answer()
-        return
-
-    chat_id = q.message.chat_id
-    await q.answer("🎲 يلا نرمي!")
-
-    try:
-        await q.edit_message_text(f"{game['emoji']} جاهز؟ إنت ضد ياسمين...")
-    except Exception:
-        pass
-
-    # رمية المستخدم (تظهر متحركة في الشات)
-    user_roll = await context.bot.send_dice(
-        chat_id=chat_id, emoji=game["emoji"]
-    )
-    await asyncio.sleep(3.2)  # وقت الأنيميشن عشان القيمة تكون واضحة
-
-    # رمية ياسمين
-    bot_roll = await context.bot.send_dice(
-        chat_id=chat_id, emoji=game["emoji"]
-    )
-    await asyncio.sleep(3.2)
-
-    user_val = user_roll.dice.value
-    bot_val = bot_roll.dice.value
-
-    if key == "slot":
-        # في السلوت أي قيمة عالية/متطابقة = حظ حلو، بنقارن القيم برضو
-        pass
-
-    if user_val > bot_val:
-        result = f"🎉 كسبت! ({user_val} مقابل {bot_val})"
-    elif user_val < bot_val:
-        result = f"😅 خسرت! ({user_val} مقابل {bot_val})"
-    else:
-        result = f"🤝 تعادل! ({user_val} مقابل {bot_val})"
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"{game['emoji']} النتيجة:\n\n{result}\n\nتحب تلعب تاني؟",
-        reply_markup=dice_result_keyboard(key),
-    )
-
-
-# ----------------------------------------------------------------
 # استقبال الأفعال أثناء اللعب
 # ----------------------------------------------------------------
 
@@ -1750,10 +1623,6 @@ async def handle_game_action(update, context, action):
 
     if subaction == "rps":
         await _handle_rps(update, context, extra[0] if extra else "")
-        return
-
-    if subaction == "dice":
-        await _handle_dice_duel(update, context, extra[0] if extra else "")
         return
 
     target_raw = extra[0] if extra else None
@@ -1810,28 +1679,6 @@ async def handle_game_action(update, context, action):
                 target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
                 session["data"]["day_votes"][user_id] = target
                 await q.answer("🗳️ سجلت تصويتك.")
-
-                # تحديث حي لعدد المصوتين في نفس الرسالة — يخلق تشويق
-                # وحركة بدل ما الكل يستنى بصمت لحد ما النتيجة تطلع.
-                alive_now = _alive_players(session)
-                voted_count = len(session["data"]["day_votes"])
-                vmsg_id = session["data"].get("day_vote_msg_id")
-                vchat_id = session["data"].get("day_vote_chat_id")
-                if vmsg_id and vchat_id:
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=vchat_id,
-                            message_id=vmsg_id,
-                            text=(
-                                "🗳️ صوّتوا على مين تحسوا إنه المافيا:\n\n"
-                                f"⏳ {voted_count}/{len(alive_now)} صوّتوا لحد الآن..."
-                            ),
-                            reply_markup=_players_keyboard(
-                                "mvote", chat_id, alive_now, include_skip=True
-                            ),
-                        )
-                    except Exception:
-                        pass
             elif subaction == "mforce":
                 if user_id != session["host_id"]:
                     await q.answer("بس صاحب اللعبة يقدر يفرض الانتقال.", show_alert=True)
@@ -1993,16 +1840,6 @@ async def game_callback_router(update, context):
         )
         return
 
-    if data == "games:dice":
-        await q.answer()
-        await q.edit_message_text(
-            "🎲 *ألعاب النرد المتحركة*\n\n"
-            "اختار لعبة، وشوف الأنيميشن الحقيقي وإنت بتلعب ضد ياسمين — الأعلى رقم يكسب 🔥",
-            parse_mode="Markdown",
-            reply_markup=dice_games_keyboard(),
-        )
-        return
-
     if data.startswith("game:") and data[5:] in GAME_RULES:
         await start_game_lobby(update, context, data[5:])
         return
@@ -2063,6 +1900,84 @@ USER_RATE_LIMIT = defaultdict(
 
 RATE_LIMIT_COUNT = 10
 RATE_LIMIT_SECONDS = 60
+
+# ============================================================
+# 12.5 حماية ضغط القروبات وطلبات AI
+# ============================================================
+MAX_CONCURRENT_AI_REQUESTS = 3
+AI_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_AI_REQUESTS)
+GROUP_AI_COOLDOWN_SECONDS = 2.0
+GROUP_AI_LAST_REQUEST = {}
+AI_STATE_LOCK = asyncio.Lock()
+
+
+async def claim_ai_request(chat_id, chat_type):
+    """منع طلبات AI المتلاحقة جداً من نفس القروب."""
+    if chat_type not in ["group", "supergroup"]:
+        return True
+
+    now = time.monotonic()
+    async with AI_STATE_LOCK:
+        last = GROUP_AI_LAST_REQUEST.get(chat_id, 0.0)
+        if now - last < GROUP_AI_COOLDOWN_SECONDS:
+            print(f"[GROUP THROTTLE] تجاهل طلب AI سريع في {chat_id}")
+            return False
+        GROUP_AI_LAST_REQUEST[chat_id] = now
+        if len(GROUP_AI_LAST_REQUEST) > 2000:
+            cutoff = now - 3600
+            for gid, ts in list(GROUP_AI_LAST_REQUEST.items()):
+                if ts < cutoff:
+                    GROUP_AI_LAST_REQUEST.pop(gid, None)
+    return True
+
+
+def ai_result_is_valid(result):
+    """يمنع إرسال ردود فارغة أو metadata مثل User Safety: safe."""
+    if not isinstance(result, str):
+        return False
+    text = result.strip()
+    if not text:
+        return False
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if normalized in {
+        "user safety: safe",
+        "user safety: unsafe",
+        "safety: safe",
+        "safety: unsafe",
+    }:
+        return False
+    return True
+
+
+async def ask_ai_with_fallback(system_prompt, conversation_history, chat_id, chat_type):
+    """Gemini -> Groq -> OpenRouter خارج event loop مع حماية الضغط."""
+    if not await claim_ai_request(chat_id, chat_type):
+        return None
+
+    async with AI_SEMAPHORE:
+        if GEMINI_KEYS:
+            result = await asyncio.to_thread(
+                ask_gemini, system_prompt, conversation_history
+            )
+            if ai_result_is_valid(result):
+                return result.strip()
+
+        print("[FALLBACK] الانتقال إلى Groq...")
+        result = await asyncio.to_thread(
+            ask_groq, system_prompt, conversation_history
+        )
+        if ai_result_is_valid(result):
+            return result.strip()
+
+        print("[FALLBACK] الانتقال إلى OpenRouter...")
+        result = await asyncio.to_thread(
+            ask_openrouter, system_prompt, conversation_history
+        )
+        if ai_result_is_valid(result):
+            return result.strip()
+
+    print("[AI] كل خدمات الذكاء الاصطناعي فشلت — تجاهل بصمت.")
+    return None
 
 
 def check_rate_limit(user_id):
@@ -2148,27 +2063,6 @@ def init_database():
                     last_seen TEXT,
                     message_count INTEGER DEFAULT 0,
                     PRIMARY KEY (chat_id, user_id)
-                )
-                """
-            )
-
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS custom_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    trigger_word TEXT NOT NULL,
-                    reply_text TEXT NOT NULL,
-                    created_at TEXT
-                )
-                """
-            )
-
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS vip_users (
-                    user_id INTEGER PRIMARY KEY,
-                    full_name TEXT,
-                    added_at TEXT
                 )
                 """
             )
@@ -2440,7 +2334,185 @@ COMMAND_WORDS = [
 #
 FIXED_REPLY_MAX_LEN = 40
 
-FIXED_REPLIES = []  # فاضية دايماً — الردود بتضاف من لوحة ياسمين فقط
+FIXED_REPLIES = [
+    {
+        "triggers": ["سلام عليكم", "السلام عليكم", "سلام", "السلام"],
+        "replies": [
+            "وعليكم السلام ورحمة الله وبركاته 🌸",
+            "وعليكم السلام حبيبي، عامل شنو؟ 🌸",
+        ],
+    },
+    {
+        "triggers": ["صباح الخير", "صباح النور", "صباحك سعيد"],
+        "replies": [
+            "صباح النور والسرور ☀️",
+            "صباح الخير عليك يا رب يكون يومك حلو 🌞",
+        ],
+    },
+    {
+        "triggers": ["مساء الخير", "مساء النور", "مسائك سعيد"],
+        "replies": [
+            "مساء النور والفل 🌙",
+            "مساء الخير حبيبنا 🌙✨",
+        ],
+    },
+    {
+        "triggers": ["كيفك", "كيف حالك", "كيفكم", "عامل شنو", "شخبارك", "اخبارك شنو"],
+        "replies": [
+            "الحمدلله تمام، وانت كيفك؟ 😊",
+            "ماشي الحال والحمدلله، شخبارك انت؟",
+        ],
+    },
+    {
+        "triggers": ["شكرا", "شكراً", "متشكر", "مشكور", "تسلم", "يعطيك العافية"],
+        "replies": [
+            "العفو حبيبي ❤️ في اي وقت",
+            "ولا يهمك، دايماً في الخدمة 🌸",
+        ],
+    },
+    {
+        "triggers": ["تصبح على خير", "تصبحون على خير", "ليلة سعيدة"],
+        "replies": [
+            "وانت من اهله، تصبح على خير 🌙",
+        ],
+    },
+    {
+        "triggers": ["الله يصبحك بالخير", "صبحك الله بالخير"],
+        "replies": ["وياك يا رب 🌞"],
+    },
+    {
+        "triggers": ["مع السلامة", "باي", "سلامات", "الى اللقاء"],
+        "replies": [
+            "مع السلامة يا قلبي، ارجع اي وقت 🌸",
+        ],
+    },
+    {
+        "triggers": ["حبيتك", "بحبك", "احبك"],
+        "replies": [
+            "الله يخليك ❤️ انا هنا ليك دايماً",
+        ],
+    },
+    {
+        "triggers": ["مين انتي", "من انتي", "شنو اسمك", "اسمك شنو"],
+        "replies": [
+            "انا ياسمين، مساعدتك الذكية 🌸 اتفضل اسألني اي حاجة",
+        ],
+    },
+    {
+        "triggers": ["انتي بوت", "انتي روبوت", "انتي ذكاء اصطناعي"],
+        "replies": [
+            "أيوة انا مساعدة ذكاء اصطناعي اسمي ياسمين، بس بحاول اكون قريبة منك 😄",
+        ],
+    },
+    {
+        "triggers": ["مين سواك", "مين عملك", "مين برمجك", "مين مطورك"],
+        "replies": [
+            "المهندس أحمد هو اللي طورني 👨‍💻",
+        ],
+    },
+    {
+        "triggers": ["الحمد لله", "الحمدلله"],
+        "replies": ["الحمدلله دائماً وأبداً 🌸"],
+    },
+    {
+        "triggers": ["ما شاء الله", "ماشاء الله"],
+        "replies": ["الله يبارك فيك 🌸"],
+    },
+    {
+        "triggers": ["مبروك", "الف مبروك"],
+        "replies": ["مبارك عليك يا رب دايماً في تقدم 🎉"],
+    },
+    {
+        "triggers": ["عيد مبارك", "كل سنة وانت طيب", "كل سنه وانتا طيب"],
+        "replies": ["وانت طيب يا رب، كل سنة وانت بخير 🌙"],
+    },
+    {
+        "triggers": ["رمضان كريم", "رمضان مبارك"],
+        "replies": ["الله يتقبل منا ومنك، رمضان كريم 🌙"],
+    },
+    {
+        "triggers": ["زعلان", "زعلانة", "حزين", "حزينة"],
+        "replies": [
+            "خير ان شاء الله، عايز تحكيلي شنو حصل؟ 🤍",
+        ],
+    },
+    {
+        "triggers": ["فرحان", "فرحانة", "مبسوط", "مبسوطة"],
+        "replies": ["الله يديم عليك الفرحة دي 🎉"],
+    },
+    {
+        "triggers": ["تعبان", "تعبانة", "متعب", "مرهق"],
+        "replies": ["خد راحتك شوية، صحتك أهم حاجة 🤍"],
+    },
+    {
+        "triggers": ["ملل", "زهقان", "زهقانة", "بورد"],
+        "replies": [
+            "تعال نلعب لعبة كسر الملل، اكتب لعبة وشوف 🎮",
+        ],
+    },
+    {
+        "triggers": ["جعان", "جعانة", "جوعان"],
+        "replies": ["يلا كل حاجة تحبها، بس متنساش تدعيني 😄🍽️"],
+    },
+    {
+        "triggers": ["الجو حر", "الجو حار", "حراره", "الجو شديد"],
+        "replies": ["الله يعينا، خش مكان فيهو مروحة او مكيف واشرب مويه كتير 💧"],
+    },
+    {
+        "triggers": ["ادعيلي", "ادعيلي بالتوفيق", "ادعي ليا"],
+        "replies": ["الله يوفقك ويسهل ليك امرك يا رب 🤲"],
+    },
+    {
+        "triggers": ["مبسوط بيك", "حبوبة", "حلوة انتي", "لطيفة انتي"],
+        "replies": ["الله يخليك، انت زول لطيف برضو ❤️"],
+    },
+    {
+        "triggers": ["اضحكيني", "قوليلي نكتة", "نكتة"],
+        "replies": [
+            "طيب اسمع دي: ليه الكمبيوتر ما بمرض؟ عشان عندو انتي فايروس 😂",
+        ],
+    },
+    {
+        "triggers": ["كم الساعة", "الساعة كم", "وقت شنو"],
+        "replies": ["ما عندي ساعة دقيقة، شوف في تليفونك اسرع 😄"],
+    },
+    {
+        "triggers": ["اي يوم النهاردة", "شنو اليوم", "تاريخ اليوم"],
+        "replies": ["شوف التاريخ من تليفونك يا حبيب، ما متابعة بالتقويم 😅"],
+    },
+    {
+        "triggers": ["كورة", "مباراة", "المريخ", "الهلال السوداني"],
+        "replies": ["يا سلام على الكورة السودانية 😄 مع مين انت؟"],
+    },
+    {
+        "triggers": ["حبوبتي انتي", "قمر انتي", "جميلة انتي"],
+        "replies": ["هههه الله يخليك، خليك مؤدب معاي 😄"],
+    },
+    {
+        "triggers": ["الله معك", "الله وياك", "ربنا يوفقك"],
+        "replies": ["ويوفقك انت كمان يا رب 🤲"],
+    },
+    {
+        "triggers": ["اوكي", "تمام", "ماشي", "حسنا"],
+        "replies": ["تمام 👍"],
+    },
+    {
+        "triggers": ["نعم", "ايوة", "أيوة", "yes"],
+        "replies": ["تمام 🙂"],
+    },
+    {
+        "triggers": ["حبيبي", "حبيبتي", "يا قلبي"],
+        "replies": ["الله يخليك حبيبي ❤️"],
+    },
+    {
+        "triggers": ["برافو", "احسنت", "تمام كده"],
+        "replies": ["يا سلام عليك، تسلم 🙌"],
+    },
+    {
+        "triggers": ["اشتقتلك", "وحشتيني", "وحشتني"],
+        "replies": ["وانت كمان وحشتني ❤️ زورني اي وقت"],
+    },
+]
 
 
 def match_fixed_reply(text):
@@ -2460,11 +2532,6 @@ def match_fixed_reply(text):
         for trigger in item["triggers"]:
             if trigger in normalized:
                 return random.choice(item["replies"])
-
-    # الردود المخصصة المضافة من اللوحة الثانية
-    for item in CUSTOM_REPLIES:
-        if item["trigger"].strip().lower() in normalized:
-            return item["reply"]
 
     return None
 
@@ -2542,28 +2609,7 @@ CONTACT_WORDS = [
     "عاوز اكلمك",
     "داير اكلمك",
     "كيف اتواصل مع احمد",
-    "كيف اتواصل مع أحمد",
-    # عبارات عامة من غير ذكر اسم أحمد صراحة
-    "دايرني",
-    "داير يوصلني",
-    "داير يوصل لي",
-    "داير يعرف عني",
-    "زول سألني",
-    "زول سأل عني",
-    "زول سال عني",
-    "زول سالني",
-    "زول داير",
-    "في زول دايرني",
-    "في زول داير",
-    "مين دايرني",
-    "قوليلو دايرو",
-    "قوليله دايره",
-    "ابلغه عني",
-    "ابلغيه عني",
-    "ابلغو دايرني",
-    "خليه يعرف اني",
-    "خبريه اني",
-    "وصليه اني داير"
+    "كيف اتواصل مع أحمد"
 ]
 
 
@@ -2787,6 +2833,14 @@ Environment Variables
 لو المستخدم يمزح، ممكن تمزحي معاه.
 
 لو المستخدم جاد، كوني جادة.
+
+قواعد اللغة مهمة جداً:
+- إذا كانت رسالة المستخدم بالعربية، فالرد يكون بالعربية، ويفضل باللهجة السودانية الطبيعية.
+- لا تدخلي كلمات أو جمل إنجليزية عشوائية داخل الرد العربي بدون سبب.
+- إذا كانت رسالة المستخدم بالإنجليزية، يمكن الرد بالإنجليزية.
+- إذا خلط المستخدم العربية والإنجليزية، يمكن تقليد أسلوبه باعتدال، لكن لا تخلطي اللغتين عشوائياً.
+- أسماء المستخدمين والمصطلحات التقنية وأسماء الخدمات يمكن أن تبقى بالإنجليزية عند الحاجة.
+- لا تكتبي عبارات نظامية أو metadata مثل: User Safety: safe.
 """
 
 
@@ -2842,13 +2896,15 @@ def ask_gemini(system_prompt, conversation_history):
             ):
                 result = response.text.strip()
 
-                if result:
+                if ai_result_is_valid(result):
                     print(
                         f"[GEMINI] نجح المفتاح "
                         f"{index}/{total_keys}"
                     )
 
                     return result
+
+                print(f"[GEMINI] المفتاح {index} رجع بنتيجة غير صالحة.")
 
             print(
                 f"[GEMINI] المفتاح {index} "
@@ -2965,7 +3021,7 @@ def ask_groq(system_prompt, conversation_history):
                         .get("content")
                     )
 
-                    if result:
+                    if ai_result_is_valid(result):
                         print(
                             f"[GROQ] نجح "
                             f"KEY {key_index} "
@@ -3009,6 +3065,8 @@ def ask_groq(system_prompt, conversation_history):
                     f"[GROQ ERROR] "
                     f"{type(e).__name__}: {e}"
                 )
+                cooldown_key("groq", key, 30)
+                break
 
     print("[GROQ] كل المحاولات فشلت.")
     return None
@@ -3082,7 +3140,7 @@ def ask_openrouter(system_prompt, conversation_history):
                     .get("content")
                 )
 
-                if result:
+                if ai_result_is_valid(result):
                     print(
                         f"[OPENROUTER] نجح "
                         f"KEY {key_index}"
@@ -3912,150 +3970,6 @@ def update_group_title(chat_id, title):
 load_approved_groups()
 
 
-# ============================================================
-# الردود المخصصة (تُضاف من اللوحة الثانية) — تُحمّل في الذاكرة
-# عشان ما نضرب SQLite على كل رسالة.
-# ============================================================
-
-CUSTOM_REPLIES = []  # [{"id": int, "trigger": str, "reply": str}, ...]
-
-
-def load_custom_replies():
-    try:
-        with DB_LOCK:
-            conn = sqlite3.connect(DATABASE_FILE)
-            rows = conn.execute(
-                "SELECT id, trigger_word, reply_text FROM custom_replies ORDER BY id"
-            ).fetchall()
-            conn.close()
-        CUSTOM_REPLIES.clear()
-        for rid, trig, rep in rows:
-            CUSTOM_REPLIES.append({"id": rid, "trigger": trig, "reply": rep})
-    except Exception as e:
-        print(f"[CUSTOM REPLIES LOAD ERROR]: {e}")
-
-
-def add_custom_reply(trigger_word, reply_text):
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        cur = conn.execute(
-            "INSERT INTO custom_replies (trigger_word, reply_text, created_at) VALUES (?, ?, ?)",
-            (trigger_word, reply_text, now)
-        )
-        new_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-    CUSTOM_REPLIES.append({"id": new_id, "trigger": trigger_word, "reply": reply_text})
-    return new_id
-
-
-def delete_custom_reply(reply_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        conn.execute("DELETE FROM custom_replies WHERE id=?", (reply_id,))
-        conn.commit()
-        conn.close()
-    CUSTOM_REPLIES[:] = [r for r in CUSTOM_REPLIES if r["id"] != reply_id]
-
-
-load_custom_replies()
-
-
-# ============================================================
-# الأصدقاء المميزون (VIP) — معاملة خاصة: بدون Rate Limit وبدون
-# الحاجة لنداء اسم ياسمين في القروب.
-# ============================================================
-
-VIP_USERS = set()
-
-
-def load_vip_users():
-    try:
-        with DB_LOCK:
-            conn = sqlite3.connect(DATABASE_FILE)
-            rows = conn.execute("SELECT user_id FROM vip_users").fetchall()
-            conn.close()
-        VIP_USERS.update(row[0] for row in rows)
-    except Exception as e:
-        print(f"[VIP LOAD ERROR]: {e}")
-
-
-def add_vip_user(user_id, full_name):
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        conn.execute(
-            "INSERT OR REPLACE INTO vip_users (user_id, full_name, added_at) VALUES (?, ?, ?)",
-            (user_id, full_name, now)
-        )
-        conn.commit()
-        conn.close()
-    VIP_USERS.add(user_id)
-
-
-def remove_vip_user(user_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        conn.execute("DELETE FROM vip_users WHERE user_id=?", (user_id,))
-        conn.commit()
-        conn.close()
-    VIP_USERS.discard(user_id)
-
-
-def get_vip_users():
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        rows = conn.execute(
-            "SELECT user_id, full_name, added_at FROM vip_users ORDER BY added_at DESC"
-        ).fetchall()
-        conn.close()
-    return rows
-
-
-load_vip_users()
-
-
-# ============================================================
-# سجلات الخاص لكل شخص على حدة (من conversation_memory)
-# ============================================================
-
-def get_private_chat_users(limit=200):
-    """يرجّع كل الأشخاص اللي دخلوا خاص مع ياسمين وليهم رسائل محفوظة."""
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        rows = conn.execute(
-            """
-            SELECT DISTINCT cm.user_id, u.full_name, u.username
-            FROM conversation_memory cm
-            LEFT JOIN users u ON u.user_id = cm.user_id
-            WHERE cm.chat_id = cm.user_id
-            ORDER BY cm.user_id DESC
-            LIMIT ?
-            """,
-            (limit,)
-        ).fetchall()
-        conn.close()
-    return rows
-
-
-def get_private_log_for_user(user_id, limit=200):
-    with DB_LOCK:
-        conn = sqlite3.connect(DATABASE_FILE)
-        rows = conn.execute(
-            """
-            SELECT role, content, created_at
-            FROM conversation_memory
-            WHERE chat_id = ? AND user_id = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-            """,
-            (user_id, user_id, limit)
-        ).fetchall()
-        conn.close()
-    return rows
-
-
 def make_pdf_log():
     """إنشاء PDF للوق مباشرة في الذاكرة حتى يشتغل زر اللوق من لوحة أحمد."""
     try:
@@ -4114,151 +4028,8 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("👥 القروبات", callback_data="panel:groups"), InlineKeyboardButton("🧠 الذاكرة", callback_data="panel:memory")],
         [InlineKeyboardButton("📂 اللوق PDF", callback_data="panel:logs"), InlineKeyboardButton("🤖 الخدمات", callback_data="panel:status")],
         [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")],
-        [InlineKeyboardButton("⚙️ لوحة ياسمين (ردود/VIP/سجلات)", callback_data="panel2:home")],
         [InlineKeyboardButton("🔄 تحديث", callback_data="panel:home")]
     ])
-
-
-# ============================================================
-# 🌸 لوحة ياسمين (اللوحة الثانية) — ردود جاهزة + VIP + سجلات خاص
-# ============================================================
-
-def panel2_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 الردود الجاهزة", callback_data="panel2:replies")],
-        [InlineKeyboardButton("⭐ الأصدقاء المميزين (VIP)", callback_data="panel2:vip")],
-        [InlineKeyboardButton("📂 سجلات الخاص", callback_data="panel2:logs")],
-        [InlineKeyboardButton("⬅️ رجوع للوحة أحمد", callback_data="panel:home")],
-    ])
-
-
-async def show_panel2(update, context):
-    user = update.effective_user
-    if not user or not is_admin_user(user.id):
-        return False
-    text = (
-        "🌸 لوحة ياسمين\n\n"
-        "من هنا تتحكم في الردود الجاهزة، الأصدقاء المميزين (VIP)، "
-        "وتقدر تفتح سجل خاص أي شخص لوحده."
-    )
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=panel2_keyboard())
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=panel2_keyboard())
-    return True
-
-
-async def panel2_callback(update, context):
-    q = update.callback_query
-    if not q:
-        return
-    if q.from_user.id != ADMIN_ID:
-        await q.answer("ما عندك صلاحية 😅", show_alert=True)
-        return
-    await q.answer()
-    data = q.data or ""
-
-    if data == "panel2:home":
-        return await show_panel2(update, context)
-
-    # ---------------- الردود الجاهزة ----------------
-    if data == "panel2:replies":
-        lines = [f"💬 الردود الجاهزة\n\n📌 أساسية (من الكود): {len(FIXED_REPLIES)}\n📌 مضافة من اللوحة: {len(CUSTOM_REPLIES)}\n"]
-        buttons = []
-        if not CUSTOM_REPLIES:
-            lines.append("ما فيه ردود مضافة من اللوحة لسه.")
-        for item in CUSTOM_REPLIES[:30]:
-            lines.append(f"• «{item['trigger']}» → {item['reply'][:40]}")
-            buttons.append([InlineKeyboardButton(f"🗑 حذف: {item['trigger'][:20]}", callback_data=f"panel2:delreply:{item['id']}")])
-        buttons.append([InlineKeyboardButton("➕ إضافة رد جديد", callback_data="panel2:addreply")])
-        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
-        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
-        return
-
-    if data == "panel2:addreply":
-        context.user_data["panel_waiting"] = "add_reply"
-        await q.edit_message_text(
-            "➕ إضافة رد جاهز جديد\n\n"
-            "اكتب بالشكل ده بالضبط (سطر واحد، والفاصل | ):\n\n"
-            "الكلمة المفتاحية | الرد\n\n"
-            "مثال:\nكيف الجو | الجو حلو اليوم الحمدلله ☀️",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel2:replies")]])
-        )
-        return
-
-    if data.startswith("panel2:delreply:"):
-        rid = int(data.split(":")[-1])
-        delete_custom_reply(rid)
-        await q.answer("تم حذف الرد", show_alert=True)
-        return
-
-    # ---------------- VIP ----------------
-    if data == "panel2:vip":
-        rows = get_vip_users()
-        lines = [f"⭐ الأصدقاء المميزين ({len(rows)})\n"]
-        buttons = []
-        for uid, name, added_at in rows:
-            lines.append(f"• {name or 'بدون اسم'} | ID: {uid}")
-            buttons.append([InlineKeyboardButton(f"🗑 إزالة: {(name or str(uid))[:20]}", callback_data=f"panel2:vipdel:{uid}")])
-        if not rows:
-            lines.append("ما فيه أصدقاء مميزين مضافين لسه.")
-        buttons.append([InlineKeyboardButton("➕ إضافة صديق مميز", callback_data="panel2:vipadd")])
-        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
-        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
-        return
-
-    if data == "panel2:vipadd":
-        context.user_data["panel_waiting"] = "add_vip"
-        await q.edit_message_text(
-            "➕ إضافة صديق مميز\n\n"
-            "ابعت الآن الـID بتاعه (رقم)، أو حوّل ليّا رسالة منه هنا وأنا حاخد الـID تلقائياً.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel2:vip")]])
-        )
-        return
-
-    if data.startswith("panel2:vipdel:"):
-        uid = int(data.split(":")[-1])
-        remove_vip_user(uid)
-        await q.answer("تم إزالة الصفة المميزة", show_alert=True)
-        return
-
-    # ---------------- سجلات الخاص ----------------
-    if data == "panel2:logs":
-        rows = get_private_chat_users(100)
-        lines = ["📂 سجلات الخاص — الأشخاص اللي دخلوا خاص\n"]
-        buttons = []
-        for uid, name, username in rows:
-            label = name or "مستخدم"
-            if username:
-                label += f" @{username}"
-            lines.append(f"• {label} | ID: {uid}")
-            buttons.append([InlineKeyboardButton(f"📄 {(name or str(uid))[:22]}", callback_data=f"panel2:userlog:{uid}")])
-        if not rows:
-            lines.append("ما فيه محادثات خاصة محفوظة لسه.")
-        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:home")])
-        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
-        return
-
-    if data.startswith("panel2:userlog:"):
-        uid = int(data.split(":")[-1])
-        rows = get_private_log_for_user(uid, 100)
-        if not rows:
-            await q.answer("ما فيه رسائل محفوظة لهذا الشخص.", show_alert=True)
-            return
-        lines = [f"📄 سجل الخاص — ID: {uid}\n"]
-        for role, content, created_at in rows:
-            who = "👤 المستخدم" if role == "user" else "🌸 ياسمين"
-            snippet = content if len(content) <= 300 else content[:300] + "…"
-            lines.append(f"[{created_at}] {who}:\n{snippet}\n")
-        full_text = "\n".join(lines)
-        # تليجرام بيرفض الرسائل الطويلة جداً، فبنقص لآخر جزء لو النص كبير.
-        if len(full_text) > 3800:
-            full_text = "…(مقتطع، آخر جزء من السجل)…\n\n" + full_text[-3800:]
-        await q.edit_message_text(
-            full_text,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="panel2:logs")]])
-        )
-        return
 
 
 async def show_admin_panel(update, context):
@@ -4576,49 +4347,6 @@ async def handle_admin_direct_message(update, context):
         )
         return True
 
-    # إضافة رد جاهز جديد من اللوحة الثانية
-    if context.user_data.get("panel_waiting") == "add_reply" and text:
-        context.user_data.pop("panel_waiting", None)
-        if "|" not in text:
-            await update.message.reply_text(
-                "❌ الصيغة غلط. لازم يكون فيه | بين الكلمة المفتاحية والرد.\n"
-                "مثال: كيف الجو | الجو حلو اليوم ☀️"
-            )
-            return True
-        trig, rep = text.split("|", 1)
-        trig = trig.strip().lower()
-        rep = rep.strip()
-        if not trig or not rep:
-            await update.message.reply_text("❌ لازم الكلمة المفتاحية والرد يكونوا فيهم نص.")
-            return True
-        add_custom_reply(trig, rep)
-        await update.message.reply_text(f"✅ تمت إضافة الرد.\n\nالكلمة: {trig}\nالرد: {rep}")
-        return True
-
-    # إضافة صديق مميز (VIP) جديد من اللوحة الثانية
-    if context.user_data.get("panel_waiting") == "add_vip":
-        forwarded_user = getattr(update.message, "forward_from", None)
-        if forwarded_user:
-            context.user_data.pop("panel_waiting", None)
-            add_vip_user(forwarded_user.id, forwarded_user.full_name)
-            await update.message.reply_text(
-                f"✅ {forwarded_user.full_name} بقى صديق مميز الآن ⭐"
-            )
-            return True
-        if text and text.strip().isdigit():
-            context.user_data.pop("panel_waiting", None)
-            uid = int(text.strip())
-            profile = get_user_profile(uid)
-            name = profile[0] if profile else str(uid)
-            add_vip_user(uid, name)
-            await update.message.reply_text(f"✅ {name} بقى صديق مميز الآن ⭐")
-            return True
-        if text:
-            await update.message.reply_text(
-                "❌ ابعت رقم الـID بس (أرقام فقط)، أو حوّل ليّا رسالة من الشخص مباشرة."
-            )
-            return True
-
     target_user = context.user_data.pop("admin_target_user", None)
     target_group = context.user_data.pop("admin_target_group", None)
 
@@ -4827,39 +4555,66 @@ async def handle_message(
         processed_messages.clear()
 
     # ========================================================
-    # معلومات المستخدم
+    # معلومات الرسالة الأساسية
     # ========================================================
 
     chat_id = update.message.chat_id
     chat_type = update.message.chat.type
     user = update.message.from_user
 
-    user_id = (
-        user.id
-        if user
-        else chat_id
-    )
-
+    user_id = user.id if user else chat_id
     is_admin = is_admin_user(user_id)
-    is_vip = user_id in VIP_USERS
 
-    user_fullname = (
-        user.full_name
-        if user
-        else "مستخدم"
-    )
+    user_fullname = user.full_name if user else "مستخدم"
+    username = user.username if user else ""
 
-    username = (
-        user.username
-        if user
-        else ""
-    )
+    # ========================================================
+    # النص
+    # ========================================================
 
-    update_user_profile(
-        user_id,
-        user_fullname,
-        username
-    )
+    user_text = ""
+    if update.message.text:
+        user_text = update.message.text.strip()
+    elif update.message.caption:
+        user_text = update.message.caption.strip()
+
+    # ========================================================
+    # بوابة القروبات — أول شيء قبل DB وFixed Replies وAI
+    # ========================================================
+
+    is_reply_to_bot = False
+    has_trigger = False
+
+    if chat_type in ["group", "supergroup"]:
+        # القروب لازم يكون موافق عليه.
+        if chat_id not in APPROVED_GROUPS:
+            return
+
+        replied_message = update.message.reply_to_message
+        if replied_message and replied_message.from_user:
+            is_reply_to_bot = (
+                replied_message.from_user.id == context.bot.id
+            )
+
+        bot_username = context.bot.username or "Yasmin"
+        text_lower = user_text.lower()
+        has_trigger = (
+            "ياسمين" in user_text
+            or f"@{bot_username}".lower() in text_lower
+        )
+
+        # الرسائل العادية في القروبات: تجاهل فوري بلا DB ولا AI.
+        if not is_reply_to_bot and not has_trigger:
+            return
+
+        # عدّ فقط الرسائل التي وصلت فعلاً للبوت.
+        group_msg_counters[chat_id] += 1
+
+    # ========================================================
+    # بعد عبور البوابة فقط: عمليات المستخدم وDB
+    # ========================================================
+
+    update_user_profile(user_id, user_fullname, username)
 
     user_info = (
         f"{user_fullname} "
@@ -4868,137 +4623,21 @@ async def handle_message(
     )
 
     # ========================================================
-    # النص
+    # لوحة أحمد / التحكم المباشر
     # ========================================================
 
-    user_text = ""
-
-    if update.message.text:
-        user_text = update.message.text.strip()
-
-    elif update.message.caption:
-        user_text = update.message.caption.strip()
-
-    # ========================================================
-    # تسليم دور معلّق (لاعب دخل الخاص لأول مرة بعد ما فشل إرسال دوره)
-    # ========================================================
-
-    if chat_type == "private" and user_id in PENDING_ROLE_DELIVERY:
-        pending = PENDING_ROLE_DELIVERY.pop(user_id)
-
-        try:
-            await update.message.reply_text(pending["role_text"])
-        except Exception as e:
-            print(f"[PENDING ROLE SEND ERROR]: {e}")
-
-        try:
-            await context.bot.send_message(
-                chat_id=pending["chat_id"],
-                text=f"✅ {pending['player_name']} دخل الخاص واستلم دوره، اللعبة مستمرة 🎮",
-            )
-        except Exception as e:
-            print(f"[PENDING ROLE ANNOUNCE ERROR]: {e}")
-
-        return
-
-    # ========================================================
-    # لوحة أحمد / التحكم المباشر — يتحقق النظام من ID أولاً
-    # ========================================================
-    if is_admin and user_text.strip().lower() in ["لوحة أحمد", "لوحة احمد", "لوحة احمدي"]:
+    if is_admin and user_text.strip().lower() in [
+        "لوحة أحمد", "لوحة احمد", "لوحة احمدي"
+    ]:
         await show_admin_panel(update, context)
-        return
-
-    if is_admin and user_text.strip().lower() in ["لوحة ياسمين", "اللوحة الثانية", "لوحة الردود"]:
-        await show_panel2(update, context)
         return
 
     if is_admin and await handle_admin_direct_message(update, context):
         return
 
     # ========================================================
-    # الجروبات — تسجيل + بوابة الموافقة + بوابة النداء
+    # الردود الجاهزة (Fixed Replies) — بدون استهلاك API
     # ========================================================
-    # لازم يحصل قبل أي معالجة تانية (أوامر/أذكار/ألعاب/Rate Limit/AI)
-    # عشان ما نعالج رسائل قروب ما موجهة لياسمين أصلاً.
-
-    is_reply_to_bot = False
-    has_trigger = False
-
-    if chat_type in ["group", "supergroup"]:
-        # سجّل القروب واسمَه وأعضاءه حتى لو كان موقوفاً، عشان لوحة أحمد تكون محدثة.
-        save_group_record(
-            chat_id,
-            update.message.chat.title or "قروب بدون اسم",
-            chat_id in APPROVED_GROUPS
-        )
-        if user:
-            save_group_member(
-                chat_id,
-                user_id,
-                user_fullname,
-                username
-            )
-
-        # لا تعمل ياسمين في القروب إلا بعد موافقة أحمد
-        if chat_id not in APPROVED_GROUPS:
-            return
-
-        group_msg_counters[chat_id] += 1
-
-        # ------------------------------------------------------
-        # لو في ردهة لعبة مفتوحة (لسه ما بدأت) وزحمة رسائل القروب
-        # دفنتها فوق، نعيد نشرها تاني في الأسفل عشان الناس تلقاها.
-        # ------------------------------------------------------
-        LOBBY_REPOST_AFTER = 15
-
-        active_session = GAME_SESSIONS.get(game_key(chat_id))
-        if active_session and active_session.get("status") == "lobby":
-            active_session["msgs_since_prompt"] = (
-                active_session.get("msgs_since_prompt", 0) + 1
-            )
-            if active_session["msgs_since_prompt"] >= LOBBY_REPOST_AFTER:
-                active_session["msgs_since_prompt"] = 0
-                try:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "🔔 تذكير: في لعبة لسه فاتحة للانضمام 👇\n\n"
-                            + _lobby_text(active_session)
-                        ),
-                        reply_markup=game_lobby_keyboard(),
-                    )
-                except Exception as e:
-                    print(f"[LOBBY REPOST ERROR]: {e}")
-
-        if update.message.reply_to_message:
-            replied_user = (
-                update.message
-                .reply_to_message
-                .from_user
-            )
-
-            if replied_user:
-                is_reply_to_bot = (
-                    replied_user.id == context.bot.id
-                )
-
-        bot_username = (
-            context.bot.username
-            or "Yasmin"
-        )
-
-        has_trigger = (
-            "ياسمين" in user_text
-            or
-            f"@{bot_username}".lower()
-            in user_text.lower()
-        )
-
-    # ========================================================
-    # الردود الجاهزة (Fixed Replies) — بدون أي استهلاك API
-    # ========================================================
-    # تشتغل في الخاص وفي القروب (بعد موافقة القروب) بدون ما
-    # تحتاج نداء اسم ياسمين أو Reply عليها.
 
     fixed_reply = match_fixed_reply(user_text)
 
@@ -5007,18 +4646,6 @@ async def handle_message(
             await update.message.reply_text(fixed_reply)
         except Exception as e:
             print(f"[FIXED REPLY ERROR]: {e}")
-
-        return
-
-    # في القروبات: لازم ذكر ياسمين أو Reply عليها عشان أي معالجة
-    # تانية (أوامر/أذكار/ألعاب/تواصل/Rate Limit/AI) تكمل.
-    # استثناء: الأصدقاء المميزين (VIP) — ياسمين تسمع كلامهم دايماً.
-    if (
-        chat_type in ["group", "supergroup"]
-        and not is_reply_to_bot
-        and not has_trigger
-        and not is_vip
-    ):
         return
 
     # ========================================================
@@ -5094,8 +4721,12 @@ async def handle_message(
     # Rate Limit
     # ========================================================
 
-    if not is_admin and not is_vip:
+    if not is_admin:
         if not check_rate_limit(user_id):
+            if chat_type in ["group", "supergroup"]:
+                print(f"[RATE LIMIT] تجاهل رسالة من {user_id} في {chat_id}")
+                return
+
             await update.message.reply_text(
                 "يا حبيبنا 😂 "
                 "أدي البوت نفس شوية، "
@@ -5203,19 +4834,16 @@ async def handle_message(
                         mime_type=mime_type
                     )
 
-                    trans_response = (
-                        client
-                        .models
-                        .generate_content(
-                            model=GEMINI_MODEL,
-                            contents=[
-                                audio_part,
-                                (
-                                    "اكتب النص الصوتي "
-                                    "بدقة وبدون أي إضافة."
-                                )
-                            ]
-                        )
+                    trans_response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=GEMINI_MODEL,
+                        contents=[
+                            audio_part,
+                            (
+                                "اكتب النص الصوتي "
+                                "بدقة وبدون أي إضافة."
+                            )
+                        ]
                     )
 
                     if (
@@ -5431,48 +5059,18 @@ Username:
         user_memory[memory_key]
     )
 
-    reply_result = None
-
     # ========================================================
-    # Gemini
+    # AI: Gemini -> Groq -> OpenRouter
     # ========================================================
 
-    if GEMINI_KEYS:
-        reply_result = ask_gemini(
-            system_prompt,
-            conversation_history
-        )
+    reply_result = await ask_ai_with_fallback(
+        system_prompt,
+        conversation_history,
+        chat_id,
+        chat_type
+    )
 
-    # ========================================================
-    # Groq
-    # ========================================================
-
-    if not reply_result:
-        print("[FALLBACK] الانتقال إلى Groq...")
-
-        reply_result = ask_groq(
-            system_prompt,
-            conversation_history
-        )
-
-    # ========================================================
-    # OpenRouter
-    # ========================================================
-
-    if not reply_result:
-        print(
-            "[FALLBACK] الانتقال إلى OpenRouter..."
-        )
-
-        reply_result = ask_openrouter(
-            system_prompt,
-            conversation_history
-        )
-
-    # ========================================================
-    # فشل كل الخدمات — نسكت بدل ما نرسل رسالة اعتذار مزعجة
-    # ========================================================
-
+    # لو ما في رد صالح: صمت كامل.
     if not reply_result:
         return
 
@@ -5596,6 +5194,9 @@ if __name__ == "__main__":
     print("        Contact Admin: ENABLED")
     print("        Ahmed Panel: ENABLED")
     print("        PDF Logs: ENABLED")
+    print(f"        Max Concurrent AI: {MAX_CONCURRENT_AI_REQUESTS}")
+    print(f"        Group AI Cooldown: {GROUP_AI_COOLDOWN_SECONDS}s")
+    print("        Group Silent Gate: ENABLED")
     print("========================================")
 
     app = (
@@ -5605,6 +5206,7 @@ if __name__ == "__main__":
         .write_timeout(30)
         .connect_timeout(30)
         .pool_timeout(30)
+        .concurrent_updates(32)
         .build()
     )
 
@@ -5630,13 +5232,6 @@ if __name__ == "__main__":
         CallbackQueryHandler(
             admin_panel_callback,
             pattern=r"^panel:"
-        )
-    )
-
-    app.add_handler(
-        CallbackQueryHandler(
-            panel2_callback,
-            pattern=r"^panel2:"
         )
     )
 
@@ -5776,4 +5371,3 @@ if __name__ == "__main__":
     app.run_polling(
         drop_pending_updates=True
     )
-
