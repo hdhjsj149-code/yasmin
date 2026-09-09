@@ -924,7 +924,7 @@ async def _begin_game(update, context):
             names = ", ".join(session["players"][uid]["name"] for uid in failed_dm)
             await q.message.reply_text(
                 f"⚠️ ما قدرت أبعت رسالة خاصة لـ: {names}\n"
-                "لازم يبدأوا محادثة خاصة معايا أول مرة عشان أقدر أبعت لهم أدوارهم."
+                "لازم يبدأوا محادثة خاصة معايا أول مرة عشان أقدر أبعتلك أدوارهم."
             )
 
     await _start_round(update, context, session)
@@ -2336,6 +2336,12 @@ FIXED_REPLY_MAX_LEN = 40
 
 FIXED_REPLIES = [
     {
+        "triggers": ["مين سواك", "مين عملك", "مين برمجك", "مين مطورك"],
+        "replies": [
+            "المهندس أحمد هو اللي طورني وصممني 👨‍💻",
+        ],
+    },
+    {
         "triggers": ["سلام عليكم", "السلام عليكم", "سلام", "السلام"],
         "replies": [
             "وعليكم السلام ورحمة الله وبركاته 🌸",
@@ -2402,12 +2408,6 @@ FIXED_REPLIES = [
         "triggers": ["انتي بوت", "انتي روبوت", "انتي ذكاء اصطناعي"],
         "replies": [
             "أيوة انا مساعدة ذكاء اصطناعي اسمي ياسمين، بس بحاول اكون قريبة منك 😄",
-        ],
-    },
-    {
-        "triggers": ["مين سواك", "مين عملك", "مين برمجك", "مين مطورك"],
-        "replies": [
-            "المهندس أحمد هو اللي طورني 👨‍💻",
         ],
     },
     {
@@ -2593,12 +2593,6 @@ CONTACT_WORDS = [
     "عايز اتواصل مع أحمد",
     "ممكن اكلم احمد",
     "ممكن أكلم أحمد",
-    "أحمد ده منو",
-    "احمد ده منو",
-    "من هو احمد",
-    "من هو أحمد",
-    "مين احمد",
-    "مين أحمد",
     "داير اتواصل معاك",
     "داير اتكلم معاك",
     "عايز اتكلم معاك",
@@ -2623,6 +2617,66 @@ def wants_admin_contact(text):
         phrase.lower() in normalized
         for phrase in CONTACT_WORDS
     )
+
+
+# ============================================================
+# أسئلة "أحمد منو؟" — إرسال يوزر أحمد مباشرة بدون موافقة يدوية
+# ============================================================
+#
+# دي مختلفة عن CONTACT_WORDS فوق: هنا الزول بس بيسأل عن هوية
+# أحمد (مش طالب "تواصل" بالمعنى العام)، فالبوت يبعت ليهو يوزر
+# أحمد في رسالة على طول، وفي نفس الوقت يبلغ أحمد إنو زول سأل عنه.
+CONTACT_IDENTITY_WORDS = [
+    "أحمد ده منو",
+    "احمد ده منو",
+    "من هو احمد",
+    "من هو أحمد",
+    "مين احمد",
+    "مين أحمد",
+    "احمد منو",
+    "أحمد منو",
+]
+
+
+def wants_ahmed_identity(text):
+    if not text:
+        return False
+
+    normalized = text.lower()
+
+    return any(
+        phrase.lower() in normalized
+        for phrase in CONTACT_IDENTITY_WORDS
+    )
+
+
+async def send_ahmed_username_direct(context, user, user_text):
+    """
+    يرد على الزول مباشرة بيوزر/رابط أحمد بدون ما يحتاج موافقة،
+    وفي نفس الوقت يبلغ أحمد (إشعار بسيط بدون أزرار) إنو زول سأل عنه.
+    """
+    user_name = user.full_name if user else "مستخدم"
+    user_id = user.id if user else 0
+
+    if ADMIN_USERNAME:
+        admin_link = f"https://t.me/{ADMIN_USERNAME}"
+        username_line = f"@{ADMIN_USERNAME}"
+    else:
+        admin_link = f"tg://user?id={ADMIN_ID}"
+        username_line = "بدون يوزر عام، بس تقدر توصل ليه من الرابط تحت"
+
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                "🔔 زول سأل عن هويتك، وبعتنا ليهو يوزرك على طول.\n\n"
+                f"👤 الاسم: {user_name}\n"
+                f"🆔 ID: {user_id}\n\n"
+                f"💬 سأل: {user_text}"
+            ),
+        )
+    except Exception as e:
+        print(f"[AHMED IDENTITY NOTIFY ERROR]: {type(e).__name__}: {e}")
 
 
 # ============================================================
@@ -3703,6 +3757,12 @@ async def send_contact_request(
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
+                    "💬 رد عليه من هنا",
+                    callback_data=f"contact_reply:{user_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     "📩 رسّل ليهو حسابي",
                     callback_data=f"contact_yes:{user_id}"
                 )
@@ -3757,9 +3817,27 @@ async def handle_contact_callback(
         )
         return
 
-    await query.answer()
-
     data = query.data or ""
+
+    if data.startswith("contact_reply:"):
+        try:
+            target_user_id = int(data.split(":")[1])
+        except Exception:
+            await query.answer()
+            return
+
+        # نستخدم نفس آلية admin_target_user المستخدمة في لوحة أحمد
+        # عشان أي نص يكتبه أحمد بعد كده يتبعت مباشرة للزول ده.
+        context.user_data["admin_target_user"] = target_user_id
+        context.user_data.pop("admin_target_group", None)
+
+        await query.answer()
+        await query.edit_message_text(
+            "💬 اكتب رسالتك الآن وحتتبعت للزول مباشرة."
+        )
+        return
+
+    await query.answer()
 
     if data.startswith("contact_yes:"):
         try:
@@ -4027,6 +4105,7 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("📊 الإحصائيات", callback_data="panel:stats"), InlineKeyboardButton("👥 المستخدمين", callback_data="panel:users")],
         [InlineKeyboardButton("👥 القروبات", callback_data="panel:groups"), InlineKeyboardButton("🧠 الذاكرة", callback_data="panel:memory")],
         [InlineKeyboardButton("📂 اللوق PDF", callback_data="panel:logs"), InlineKeyboardButton("🤖 الخدمات", callback_data="panel:status")],
+        [InlineKeyboardButton("📨 طلبات التواصل", callback_data="panel:requests"), InlineKeyboardButton("➕ تفعيل قروب بالـ ID", callback_data="panel:groupactivate")],
         [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")],
         [InlineKeyboardButton("🔄 تحديث", callback_data="panel:home")]
     ])
@@ -4152,9 +4231,21 @@ async def admin_panel_callback(update, context):
             lines.append(f"• {shown_title}\nID: {gid} — {state}")
             buttons.append([InlineKeyboardButton(f"⚙️ {shown_title[:22]}", callback_data=f"panel:group:{gid}")])
         if not rows:
-            lines.append("ما في قروبات محفوظة لسه.\n\nملاحظة: تيليجرام ما بدي البوت قائمة بكل القروبات القديمة تلقائياً؛ أي قروب يرسل فيه البوت/يظهر في تحديثات العضوية حنسجلوه.")
+            lines.append("ما في قروبات محفوظة لسه.\n\nملاحظة: تيليجرام ما بدي البوت قائمة بكل القروبات القديمة تلقائياً؛ أي قروب يرسل فيه البوت/يظهر في تحديثات العضوية حنسجلوه، أو تقدر تفعّله يدوياً بزرار «➕ تفعيل قروب بالـ ID».")
+        buttons.append([InlineKeyboardButton("➕ تفعيل قروب بالـ ID", callback_data="panel:groupactivate")])
         buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel:home")])
         await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel:groupactivate":
+        context.user_data["panel_waiting"] = "group_activate"
+        await q.edit_message_text(
+            "➕ تفعيل قروب بالـ ID\n\n"
+            "ابعت Chat ID بتاع القروب (رقم سالب، عادة يبدأ بـ -100).\n"
+            "لو ما عارف الـID، ابعت أي رسالة من القروب للبوت @userinfobot وحيديك الرقم.\n\n"
+            "هذا التفعيل بيشتغل حتى لو القروب قديم ومافي داخله من زمان، من غير ما تشيل البوت وتضيفو تاني.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel:groups")]])
+        )
         return
 
     if data.startswith("panel:group:"):
@@ -4273,6 +4364,23 @@ async def admin_panel_callback(update, context):
             await q.answer("فشل إنشاء PDF. راجع log السيرفر وشوف [PDF LOG ERROR].", show_alert=True)
         return
 
+    if data == "panel:requests":
+        pending = context.bot_data.get("contact_requests", {})
+        buttons = []
+        if not pending:
+            text = "📨 طلبات التواصل\n\nما في طلبات تواصل معلقة حالياً."
+        else:
+            lines = ["📨 طلبات التواصل المعلقة\n"]
+            for uid_str, req in pending.items():
+                name = req.get("name", "مستخدم")
+                msg = (req.get("text") or "")[:60]
+                lines.append(f"• {name} (ID: {uid_str})\n💬 {msg}")
+                buttons.append([InlineKeyboardButton(f"💬 رد على {name[:18]}", callback_data=f"contact_reply:{uid_str}")])
+            text = "\n\n".join(lines)
+        buttons.append([InlineKeyboardButton("⬅️ رجوع", callback_data="panel:home")])
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
     if data == "panel:broadcast":
         context.user_data["broadcast_waiting"] = True
         await q.edit_message_text(
@@ -4296,6 +4404,29 @@ async def handle_admin_direct_message(update, context):
         return False
 
     text = (update.message.text or "").strip()
+
+    # تفعيل قروب قديم/جديد بالـ Chat ID مباشرة من لوحة أحمد.
+    if context.user_data.get("panel_waiting") == "group_activate" and text:
+        context.user_data.pop("panel_waiting", None)
+        try:
+            gid = int(text.strip())
+        except ValueError:
+            await update.message.reply_text("لازم تبعت رقم صحيح (Chat ID)، حاول تاني من لوحة أحمد.")
+            return True
+
+        title = ""
+        try:
+            chat = await context.bot.get_chat(gid)
+            title = getattr(chat, "title", "") or ""
+        except Exception as e:
+            print(f"[GROUP MANUAL ACTIVATE ERROR] {gid}: {e}")
+
+        APPROVED_GROUPS.add(gid)
+        save_group_record(gid, title, True)
+        await update.message.reply_text(
+            f"✅ تم تفعيل ياسمين في القروب (ID: {gid}){' — ' + title if title else ''}"
+        )
+        return True
 
     # بحث المستخدم من لوحة أحمد بدون الحاجة لكتابة ID.
     if context.user_data.get("panel_waiting") == "user_search" and text:
@@ -4674,6 +4805,35 @@ async def handle_message(
 
     if game_requested(user_text):
         await show_games_menu(update, context)
+        return
+
+    # ========================================================
+    # هل المستخدم سأل عن هوية أحمد تحديداً؟ (أحمد منو؟)
+    # ========================================================
+
+    if (
+        wants_ahmed_identity(user_text)
+        and not is_admin
+    ):
+        await send_ahmed_username_direct(context, user, user_text)
+
+        await update.message.reply_text(
+            "المهندس أحمد هو صانع ياسمين 👨‍💻\n"
+            "اتفضل تواصل معاه من هنا 👇",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "👤 تواصل مع المهندس أحمد",
+                        url=(
+                            f"https://t.me/{ADMIN_USERNAME}"
+                            if ADMIN_USERNAME
+                            else f"tg://user?id={ADMIN_ID}"
+                        )
+                    )
+                ]
+            ])
+        )
+
         return
 
     # ========================================================
@@ -5242,7 +5402,7 @@ if __name__ == "__main__":
     app.add_handler(
         CallbackQueryHandler(
             handle_contact_callback,
-            pattern=r"^contact_(yes|no):"
+            pattern=r"^contact_(yes|no|reply):"
         )
     )
 
