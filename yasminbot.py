@@ -2067,6 +2067,29 @@ def init_database():
                 """
             )
 
+            # إدارة VIP والحظر — جداول منفصلة حتى لا نغيّر بنية الجداول الحالية.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vip_users (
+                    user_id INTEGER PRIMARY KEY,
+                    full_name TEXT,
+                    username TEXT,
+                    added_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS blocked_users (
+                    user_id INTEGER PRIMARY KEY,
+                    full_name TEXT,
+                    username TEXT,
+                    blocked_at TEXT NOT NULL
+                )
+                """
+            )
+
             conn.commit()
             conn.close()
 
@@ -2149,6 +2172,164 @@ def get_user_profile(user_id):
     except Exception as e:
         print(f"[PROFILE READ ERROR]: {e}")
         return None
+
+
+def _find_user_by_username(username):
+    """البحث عن مستخدم معروف لدى ياسمين بالـUsername."""
+    term = (username or "").strip().lstrip("@").lower()
+    if not term:
+        return None
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            row = conn.execute(
+                """
+                SELECT user_id, full_name, username
+                FROM users
+                WHERE lower(username) = ?
+                LIMIT 1
+                """,
+                (term,)
+            ).fetchone()
+            conn.close()
+        return row
+    except Exception as e:
+        print(f"[USERNAME LOOKUP ERROR]: {e}")
+        return None
+
+
+def is_vip_user(user_id):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            row = conn.execute(
+                "SELECT 1 FROM vip_users WHERE user_id=?",
+                (int(user_id),)
+            ).fetchone()
+            conn.close()
+        return bool(row)
+    except Exception as e:
+        print(f"[VIP CHECK ERROR]: {e}")
+        return False
+
+
+def is_blocked_user(user_id):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            row = conn.execute(
+                "SELECT 1 FROM blocked_users WHERE user_id=?",
+                (int(user_id),)
+            ).fetchone()
+            conn.close()
+        return bool(row)
+    except Exception as e:
+        print(f"[BLOCK CHECK ERROR]: {e}")
+        return False
+
+
+def add_vip_user(user_id, full_name="", username=""):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO vip_users(user_id, full_name, username, added_at)
+                VALUES(?,?,?,?)
+                """,
+                (int(user_id), full_name or "مستخدم", username or "", time.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[VIP ADD ERROR]: {e}")
+        return False
+
+
+def remove_vip_user(user_id):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.execute("DELETE FROM vip_users WHERE user_id=?", (int(user_id),))
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[VIP REMOVE ERROR]: {e}")
+        return False
+
+
+def block_user(user_id, full_name="", username=""):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO blocked_users(user_id, full_name, username, blocked_at)
+                VALUES(?,?,?,?)
+                """,
+                (int(user_id), full_name or "مستخدم", username or "", time.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[BLOCK ADD ERROR]: {e}")
+        return False
+
+
+def unblock_user(user_id):
+    try:
+        with DB_LOCK:
+            conn = sqlite3.connect(DATABASE_FILE)
+            conn.execute("DELETE FROM blocked_users WHERE user_id=?", (int(user_id),))
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[BLOCK REMOVE ERROR]: {e}")
+        return False
+
+
+def get_vip_users(limit=100):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            "SELECT user_id, full_name, username, added_at FROM vip_users ORDER BY added_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        conn.close()
+    return rows
+
+
+def get_blocked_users(limit=100):
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            "SELECT user_id, full_name, username, blocked_at FROM blocked_users ORDER BY blocked_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        conn.close()
+    return rows
+
+
+def get_user_conversation_log(user_id, limit=50):
+    """آخر رسائل المستخدم من كل المحادثات، مرتبة من الأقدم للأحدث."""
+    with DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE)
+        rows = conn.execute(
+            """
+            SELECT chat_id, role, content, created_at
+            FROM conversation_memory
+            WHERE user_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(user_id), limit)
+        ).fetchall()
+        conn.close()
+    return list(reversed(rows))
 
 
 def load_persistent_memory(chat_id, user_id, limit=10):
@@ -4106,6 +4287,7 @@ def admin_panel_keyboard():
         [InlineKeyboardButton("👥 القروبات", callback_data="panel:groups"), InlineKeyboardButton("🧠 الذاكرة", callback_data="panel:memory")],
         [InlineKeyboardButton("📂 اللوق PDF", callback_data="panel:logs"), InlineKeyboardButton("🤖 الخدمات", callback_data="panel:status")],
         [InlineKeyboardButton("📨 طلبات التواصل", callback_data="panel:requests"), InlineKeyboardButton("➕ تفعيل قروب بالـ ID", callback_data="panel:groupactivate")],
+        [InlineKeyboardButton("👑 لوحة أحمد VIP", callback_data="panel:vip")],
         [InlineKeyboardButton("📢 إرسال جماعي", callback_data="panel:broadcast")],
         [InlineKeyboardButton("🔄 تحديث", callback_data="panel:home")]
     ])
@@ -4142,6 +4324,144 @@ async def admin_panel_callback(update, context):
         return
     await q.answer()
     data = q.data or ""
+
+    if data == "panel:vip":
+        vip_rows = get_vip_users(100)
+        blocked_rows = get_blocked_users(100)
+        await q.edit_message_text(
+            "👑 لوحة أحمد VIP\n\n"
+            f"⭐ مستخدمو VIP: {len(vip_rows)}\n"
+            f"⛔ المحظورون: {len(blocked_rows)}\n\n"
+            "من هنا تقدر تدير VIP والحظر وتشوف محادثة أي مستخدم بشكل منفصل.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ مستخدمو VIP", callback_data="panel:vipusers"),
+                 InlineKeyboardButton("👥 كل المستخدمين + اللوق", callback_data="panel:vipallusers")],
+                [InlineKeyboardButton("⛔ المحظورون", callback_data="panel:blocked")],
+                [InlineKeyboardButton("➕ إضافة VIP بالـUsername", callback_data="panel:vipadd")],
+                [InlineKeyboardButton("🚫 حظر بالـUsername", callback_data="panel:blockadd")],
+                [InlineKeyboardButton("⬅️ لوحة أحمد", callback_data="panel:home")]
+            ])
+        )
+        return
+
+    if data == "panel:vipallusers":
+        rows = get_users(100)
+        lines = ["👥 المستخدمون + اللوق الفردي\n"]
+        buttons = []
+        for uid, name, username, count, last in rows:
+            shown = f"@{username}" if username else f"ID: {uid}"
+            lines.append(f"• {name} | {shown} | رسائل: {count}")
+            buttons.append([InlineKeyboardButton(f"📜 لوق {name[:24]}", callback_data=f"panel:vipuser:{uid}")])
+        if not rows:
+            lines.append("ما في مستخدمين محفوظين.")
+        buttons.append([InlineKeyboardButton("⬅️ VIP", callback_data="panel:vip")])
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel:vipusers":
+        rows = get_vip_users(100)
+        lines = ["⭐ مستخدمو VIP\n"]
+        buttons = []
+        for uid, name, username, added_at in rows:
+            shown = f"@{username}" if username else f"ID: {uid}"
+            lines.append(f"• {name} | {shown}")
+            buttons.append([InlineKeyboardButton(f"👤 {name[:24]}", callback_data=f"panel:vipuser:{uid}")])
+        if not rows:
+            lines.append("ما في مستخدمين VIP حالياً.")
+        buttons += [
+            [InlineKeyboardButton("➕ إضافة VIP بالـUsername", callback_data="panel:vipadd")],
+            [InlineKeyboardButton("⬅️ VIP", callback_data="panel:vip")]
+        ]
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel:blocked":
+        rows = get_blocked_users(100)
+        lines = ["⛔ المستخدمون المحظورون\n"]
+        buttons = []
+        for uid, name, username, blocked_at in rows:
+            shown = f"@{username}" if username else f"ID: {uid}"
+            lines.append(f"• {name} | {shown}")
+            buttons.append([InlineKeyboardButton(f"🔓 فك حظر {name[:20]}", callback_data=f"panel:unblock:{uid}")])
+        if not rows:
+            lines.append("ما في مستخدمين محظورين.")
+        buttons += [
+            [InlineKeyboardButton("🚫 حظر بالـUsername", callback_data="panel:blockadd")],
+            [InlineKeyboardButton("⬅️ VIP", callback_data="panel:vip")]
+        ]
+        await q.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "panel:vipadd":
+        context.user_data["panel_waiting"] = "vip_add"
+        await q.edit_message_text(
+            "➕ إضافة مستخدم VIP\n\n"
+            "اكتب Username المستخدم، مثال: @ahmed\n"
+            "ملاحظة: لازم يكون المستخدم معروفاً لدى ياسمين/موجوداً في قاعدة البيانات.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel:vip")]])
+        )
+        return
+
+    if data == "panel:blockadd":
+        context.user_data["panel_waiting"] = "block_add"
+        await q.edit_message_text(
+            "🚫 حظر مستخدم\n\n"
+            "اكتب Username المستخدم، مثال: @ahmed\n"
+            "بعد الحظر ياسمين لن ترد عليه.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data="panel:vip")]])
+        )
+        return
+
+    if data.startswith("panel:vipuser:"):
+        uid = int(data.split(":")[-1])
+        profile = get_user_profile(uid)
+        if not profile:
+            await q.answer("المستخدم غير موجود", show_alert=True)
+            return
+        name, username, first, last, count = profile
+        log_rows = get_user_conversation_log(uid, 40)
+        log_lines = []
+        for chat_id_log, role, content, created_at in log_rows:
+            who = "👤 المستخدم" if role == "user" else "🤖 ياسمين"
+            log_lines.append(f"{created_at} | {who}:\n{content}")
+        log_text = "\n\n".join(log_lines) if log_lines else "لا توجد رسائل محفوظة."
+        if len(log_text) > 3000:
+            log_text = log_text[-3000:]
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📩 إرسال رسالة", callback_data=f"panel:send:{uid}")],
+            [InlineKeyboardButton("🧠 مسح ذاكرته", callback_data=f"panel:clear:{uid}")],
+            [InlineKeyboardButton("⭐ إزالة من VIP", callback_data=f"panel:vipremove:{uid}")],
+            [InlineKeyboardButton("⬅️ VIP", callback_data="panel:vip")]
+        ])
+        await q.edit_message_text(
+            f"👑 VIP — {name}\n"
+            f"Username: @{username if username else 'لا يوجد'}\n"
+            f"ID: {uid}\n"
+            f"الرسائل المسجلة: {count}\n\n"
+            f"📜 آخر المحادثة:\n{log_text}",
+            reply_markup=kb
+        )
+        return
+
+    if data.startswith("panel:vipremove:"):
+        uid = int(data.split(":")[-1])
+        remove_vip_user(uid)
+        await q.answer("تمت إزالة المستخدم من VIP", show_alert=True)
+        await q.edit_message_text(
+            "✅ تمت إزالة المستخدم من VIP.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ VIP", callback_data="panel:vip")]])
+        )
+        return
+
+    if data.startswith("panel:unblock:"):
+        uid = int(data.split(":")[-1])
+        unblock_user(uid)
+        await q.answer("تم فك الحظر", show_alert=True)
+        await q.edit_message_text(
+            "✅ تم فك حظر المستخدم.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ المحظورون", callback_data="panel:blocked")]])
+        )
+        return
 
     if data == "panel:home":
         return await show_admin_panel(update, context)
@@ -4444,6 +4764,32 @@ async def handle_admin_direct_message(update, context):
         await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
         return True
 
+    if context.user_data.get("panel_waiting") in {"vip_add", "block_add"} and text:
+        waiting = context.user_data.pop("panel_waiting", None)
+        found = _find_user_by_username(text)
+        if not found:
+            action = "إضافة VIP" if waiting == "vip_add" else "الحظر"
+            await update.message.reply_text(
+                f"❌ ما لقيت مستخدم معروف بالـUsername {text}.\n"
+                f"ما تم تنفيذ {action}. لازم المستخدم يكون مسجلاً عند ياسمين أولاً."
+            )
+            return True
+
+        uid, name, found_username = found
+        if waiting == "vip_add":
+            ok = add_vip_user(uid, name, found_username)
+            await update.message.reply_text(
+                f"⭐ تم إضافة {name} (@{found_username or 'لا يوجد'}) إلى VIP."
+                if ok else "❌ حصل خطأ أثناء إضافة المستخدم إلى VIP."
+            )
+        else:
+            ok = block_user(uid, name, found_username)
+            await update.message.reply_text(
+                f"⛔ تم حظر {name} (@{found_username or 'لا يوجد'}). ياسمين لن ترد عليه."
+                if ok else "❌ حصل خطأ أثناء حظر المستخدم."
+            )
+        return True
+
     if context.user_data.get("broadcast_waiting"):
         if text.lower() in {"إلغاء", "الغاء", "/cancel"}:
             context.user_data.pop("broadcast_waiting", None)
@@ -4744,6 +5090,10 @@ async def handle_message(
     # ========================================================
     # بعد عبور البوابة فقط: عمليات المستخدم وDB
     # ========================================================
+
+    # المستخدم المحظور: تجاهل الرسالة بالكامل بدون رد.
+    if not is_admin and is_blocked_user(user_id):
+        return
 
     update_user_profile(user_id, user_fullname, username)
 
@@ -5139,6 +5489,7 @@ async def handle_message(
             count
         ) = profile
 
+        vip_status = "⭐ هذا المستخدم VIP." if is_vip_user(user_id) else ""
         profile_context = f"""
 معلومات المستخدم الحالية:
 
@@ -5150,6 +5501,8 @@ Username:
 
 عدد الرسائل السابقة:
 {count}
+
+{vip_status}
 
 لا تذكري هذه المعلومات للمستخدم من نفسك.
 
