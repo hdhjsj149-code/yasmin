@@ -9,6 +9,7 @@ import zipfile
 import socket
 import re
 import sqlite3
+import json
 from datetime import datetime
 
 from collections import defaultdict, deque
@@ -359,213 +360,223 @@ group_msg_counters = defaultdict(int)
 
 
 # ============================================================
-# الألعاب - نظام كامل محلياً بدون API
 # ============================================================
-#
-# كل لعبة بتمر بنفس الدورة:
-#   دخول لاعبين (لوبي) -> بدء الجولة -> توزيع أدوار سرية (لو فيها) ->
-#   أحداث/أفعال -> تصويت أو حل الجولة -> فوز/خسارة -> تنظيف الجلسة.
-#
-# ملاحظة تصميم مهمة: أي زرار بيتبعت في الخاص (رسالة خاصة للاعب) لازم
-# يحمل معاه chat_id بتاع القروب جوه الـ callback_data، لأنو
-# update.effective_chat.id في الخاص = شات المستخدم الخاص، مش القروب.
-# لو ما عملنا كده الفعل بيوصل لجلسة غلط أو ما بيلقى جلسة خالص.
+# YASMINE GAME ENGINE — YASMINE: THE UNKNOWN
+# Yasmine is the only game master. Every human participant is an equal player.
+# Sessions are persisted in SQLite; one active investigation per group.
+# ============================================================
 
-GAME_SESSIONS = {}
-GAME_LOCK = threading.Lock()
+GAME_TRIGGER_WORDS = ["ألعاب ياسمين", "العاب ياسمين", "/games", "لعبة", "العب", "نلعب"]
 
-GAME_TRIGGER_WORDS = [
-    "ألعاب ياسمين", "العاب ياسمين", "/games"
+UNKNOWN_GAME_TITLE = "🕯️ YASMINE: THE UNKNOWN"
+UNKNOWN_GAME_TTL = 6 * 60 * 60
+UNKNOWN_ACTION_SECONDS = 55
+UNKNOWN_VOTE_SECONDS = 45
+UNKNOWN_ROUNDS = 3
+
+# Independent visual library for YASMINE: THE UNKNOWN.
+# Files are optional at runtime: missing media falls back to text messages.
+UNKNOWN_MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yasmine_unknown_media")
+UNKNOWN_MEDIA = {
+    "opening": "opening.jpg",
+    "lobby": "lobby.jpg",
+    "round_1": "crime_scene_1.jpg",
+    "round_2": "cctv_2.jpg",
+    "round_3": "room_17_3.jpg",
+    "evidence": "evidence.jpg",
+    "voting": "voting.jpg",
+    "win_investigators": "win_investigators.jpg",
+    "win_saboteur": "win_saboteur.jpg",
+    "tutorial": "tutorial.jpg",
+}
+
+
+def _unknown_media_path(media_key):
+    filename = UNKNOWN_MEDIA.get(media_key)
+    if not filename:
+        return None
+    path = os.path.join(UNKNOWN_MEDIA_DIR, filename)
+    return path if os.path.isfile(path) else None
+
+
+async def _unknown_send_media(bot, chat_id, media_key, caption=None, reply_markup=None):
+    """Send one optional scene image; retain the original text-only fallback."""
+    path = _unknown_media_path(media_key)
+    if not path:
+        if caption:
+            return await bot.send_message(chat_id=chat_id, text=caption, reply_markup=reply_markup)
+        return None
+    try:
+        with open(path, "rb") as photo:
+            return await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption,
+                reply_markup=reply_markup,
+            )
+    except Exception as exc:
+        print(f"[UNKNOWN MEDIA ERROR] {media_key}: {type(exc).__name__}: {exc}")
+        if caption:
+            return await bot.send_message(chat_id=chat_id, text=caption, reply_markup=reply_markup)
+        return None
+
+UNKNOWN_SCENES = {
+    1: (
+        "🌑 المرحلة الأولى: انقطاع الكهرباء\n"
+        "في فندق النخيل، انقطعت الكهرباء لمدة 47 ثانية. "
+        "بعد عودة النور، اكتشف النزلاء أن غرفة الأدلة فُتحت واختفى منها ملف مهم.\n\n"
+        "ابدأوا بجمع القرائن. كل لاعب عنده تحرك سري واحد."
+    ),
+    2: (
+        "📹 المرحلة الثانية: التسجيل المفقود\n"
+        "ياسمين عثرت على تسجيل كاميرا متقطع، وفي نفس الوقت ظهر أثر جديد قرب المصعد. "
+        "في زول بحاول يوجّه التحقيق بعيد عن الحقيقة.\n\n"
+        "اختاروا تحرككم التالي من الخاص."
+    ),
+    3: (
+        "🚪 المرحلة الثالثة: الغرفة 17\n"
+        "وصل التحقيق إلى الغرفة 17. الشاهد الوحيد مستعد يتكلم، لكن الوقت قرب ينتهي. "
+        "دي آخر فرصة لجمع القرائن قبل الاتهام النهائي.\n\n"
+        "بعد المرحلة دي، كل لاعب حيختار المشتبه فيه في تصويت سري."
+    ),
+}
+
+UNKNOWN_ROLE_INFO = {
+    "المتلاعب": (
+        "أنت الشخص الذي عبث بالأدلة. هدفك أن تجعل التحقيق يفشل. "
+        "في كل مرحلة اختر بين طمس قرينة، أو زرع قرينة مضللة، أو التظاهر بالمساعدة. "
+        "لا تكشف هويتك لأي لاعب."
+    ),
+    "المحقق": (
+        "أنت ضمن فريق كشف الحقيقة. اجمع القرائن واربط المعلومات ببعضها. "
+        "هدف الفريق هو تحديد المتلاعب في التصويت النهائي."
+    ),
+    "خبير الأدلة": (
+        "أنت متخصص في تحليل الآثار. عند اختيار تفتيش الغرف تكون قرينتك أدق من المعتاد. "
+        "شارك استنتاجاتك مع المجموعة دون كشف أي معلومة خاصة."
+    ),
+    "مسؤول الأمن": (
+        "أنت مسؤول الأمن. عند مراجعة الكاميرات تكون فرصتك في استخراج قرينة صحيحة أعلى. "
+        "راقب التناقضات ولا تتسرع في الاتهام."
+    ),
+    "الشاهد": (
+        "أنت شاهد على جزء من الأحداث. عند استجواب الشاهد تكون فرصتك في الوصول إلى قرينة صحيحة أعلى. "
+        "ساعد المجموعة على الوصول للحقيقة."
+    ),
+    "مساعد التحقيق": (
+        "أنت مساعد في التحقيق. اجمع المعلومات من الغرف والكاميرات والشهود، "
+        "وساعد المجموعة في اتخاذ القرار النهائي."
+    ),
+}
+
+UNKNOWN_INVESTIGATION_ROLES = [
+    "المحقق", "خبير الأدلة", "مسؤول الأمن", "الشاهد", "مساعد التحقيق"
 ]
 
-BANK_MAX_ROUNDS = 5
-ISLAND_MAX_DAYS = 5
-CITY_MAX_STAGES = 3
-HANDEEL_MAX_ROUNDS = 5
-MASKS_MAX_ROUNDS = 4
-SESSION_TTL_SECONDS = 3600
-
-# ----------------------------------------------------------------
-# قواعد عامة
-# ----------------------------------------------------------------
-
-GAME_RULES = {
-    "handeel": {
-        "name": "🪔 هنديل",
-        "min": 3,
-        "max": 12,
-        "description": (
-            "لعبة تخمين وخداع سريعة. لاعب واحد يستلم الدور السري «هنديل»، "
-            "والباقي يحاولوا يكتشفوه بالتصويت قبل ما تخلص الجولات."
-        ),
-        "how_to": (
-            "1️⃣ لما اللعبة تبدأ، لاعب واحد بس بيستلم في الخاص إنه «هنديل» (سري، محدش يعرف غيره).\n"
-            "2️⃣ كل جولة، جميع اللاعبين يصوّتوا في القروب على مين يشكوا إنه هنديل (أو «تخطي»).\n"
-            f"3️⃣ اللي ياخد أكتر أصوات يطلع من اللعبة وتتكشف حقيقته.\n"
-            "4️⃣ لو طلع هنديل → المجموعة تكسب فوراً. لو غلط → اللعبة مستمرة.\n"
-            f"5️⃣ لو الجولات خلصت ({HANDEEL_MAX_ROUNDS}) من غير ما يتكشف → هنديل يكسب."
-        ),
-    },
-    "mafia": {
-        "name": "🕵️ مافيا",
-        "min": 5,
-        "max": 20,
-        "description": (
-            "لعبة أدوار سرية: مافيا ومواطنون ودكتور ومحقق. "
-            "المافيا تتحرك سراً بالليل، والمدينة تناقش وتصوّت بالنهار حتى يفوز أحد الفريقين."
-        ),
-        "how_to": (
-            "1️⃣ كل لاعب ياخد دور سري في الخاص: مافيا 🔪 / دكتور 🩺 / محقق 🔎 / مواطن 👤.\n"
-            "2️⃣ بالليل: المافيا تختار ضحية (في الخاص)، الدكتور يحمي لاعب، المحقق يحقق في لاعب.\n"
-            "3️⃣ الصبح: يتعلن مين مات (لو مافي حماية)، ونتيجة تحقيق المحقق توصله سراً.\n"
-            "4️⃣ بالنهار: كل الأحياء يصوّتوا في القروب على مين يطلع من اللعبة.\n"
-            "5️⃣ تتكرر الدورة (ليل → نهار) لحد ما تفنى المافيا (المواطنين يكسبوا)، "
-            "أو المافيا يوصلوا نصف العدد أو أكتر (المافيا تكسب)."
-        ),
-    },
-    "bank": {
-        "name": "💰 سرقة البنك",
-        "min": 3,
-        "max": 10,
-        "description": (
-            "الفريق يحاول تنفيذ سرقة بنك عبر مراحل التخطيط. "
-            "كل جولة الكل يختار فعله، والقرارات تؤثر على الإنذار والغنيمة."
-        ),
-        "how_to": (
-            "1️⃣ كل جولة كل لاعب يختار فعل واحد: 🧠 تخطيط (يقلل الإنذار)، "
-            "💻 اختراق أو 🚪 دخول (ممكن يرفعوا الإنذار)، أو 🏃 محاولة هروب.\n"
-            "2️⃣ لو أكتر من نص اللاعبين اختاروا «هروب» في نفس الجولة → العملية تتحسم فوراً.\n"
-            "3️⃣ لو الإنذار وصل 5/5 → العملية فشلت والفريق اتمسك.\n"
-            f"4️⃣ لو خلصت {BANK_MAX_ROUNDS} جولات من غير هروب → يحصل هروب إجباري ويتحسم المصير حسب الإنذار."
-        ),
-    },
-    "island": {
-        "name": "🏝️ الجزيرة",
-        "min": 3,
-        "max": 12,
-        "description": (
-            "اللاعبون عالقون في جزيرة ويجب أن يحافظوا على الطعام والماء "
-            "والطاقة عبر قرارات جماعية حتى نهاية الأيام."
-        ),
-        "how_to": (
-            "1️⃣ كل يوم كل لاعب يختار مهمة: 🍖 بحث عن طعام، 💧 بحث عن ماء، "
-            "🏕️ بناء مأوى، أو 😴 راحة.\n"
-            "2️⃣ لما الكل يختار، يوم الجزيرة يتحسب مرة واحدة (الموارد بتنزل تلقائي كل يوم).\n"
-            "3️⃣ لو الطعام أو الماء وصل صفر → الفريق يخسر.\n"
-            f"4️⃣ لو الفريق كمّل {ISLAND_MAX_DAYS} أيام والموارد لسه فوق الصفر → الفريق يكسب وينجو."
-        ),
-    },
-    "spaceship": {
-        "name": "🚀 سفينة الفضاء",
-        "min": 4,
-        "max": 12,
-        "description": (
-            "طاقم سفينة يحاول إكمال مهامه، وبينهم مخربون سريون. "
-            "الطاقم يصلح ويحقق، والمخربون يخربون بدون ما ينكشفوا، وبعد كل جولة تصويت طرد."
-        ),
-        "how_to": (
-            "1️⃣ كل لاعب ياخد دور سري: 👨‍🚀 طاقم أو 💣 مخرب.\n"
-            "2️⃣ كل جولة كل واحد يختار: 🔧 إصلاح (يرفع تقدم المهمة)، 🔎 فحص لاعب (معلومة خاصة)، "
-            "أو 💥 تخريب (بس للمخرب، يخفض التقدم).\n"
-            "3️⃣ بعد كل الأفعال، الكل يصوّت يطرد لاعب مشبوه.\n"
-            "4️⃣ الطاقم يكسب لو التقدم وصل 8 أو المخربين خلصوا. المخربون يكسبوا لو عددهم ساوى أو زاد عن الطاقم."
-        ),
-    },
-    "lost_city": {
-        "name": "🕵️‍♂️ المدينة المفقودة",
-        "min": 3,
-        "max": 10,
-        "description": (
-            "مغامرة جماعية في مدينة غامضة. كل مرحلة فيها 3 طرق، طريق واحد آمن، "
-            "والباقي فيهم خطر يأثر على صحة الفريق."
-        ),
-        "how_to": (
-            "1️⃣ كل مرحلة قدامكم 3 طرق (يسار/وسط/يمين)، واحد بس آمن والباقي فيهم خطر.\n"
-            "2️⃣ كل الأحياء يصوّتوا على الطريق، والأكتر تصويتاً هو اللي يتجرب.\n"
-            "3️⃣ لو الطريق غلط، الفريق يخسر من «صحة الفريق» المشتركة.\n"
-            f"4️⃣ لو الصحة وصلت صفر → خسارة. لو وصلتوا آخر مرحلة ({CITY_MAX_STAGES}) وأنتوا لسه أحياء → فوز."
-        ),
-    },
-    "masks": {
-        "name": "🎭 الأقنعة",
-        "min": 4,
-        "max": 12,
-        "description": (
-            "كل لاعب يحصل على قناع/هوية سرية. كل جولة الكل يصوّت يطلع لاعب، "
-            "وفي الآخر القناع الأكتر بقاءً هو الفايز."
-        ),
-        "how_to": (
-            "1️⃣ كل لاعب ياخد هوية «قناع» سرية في الخاص (ما تعرفوش هويات بعض).\n"
-            "2️⃣ كل جولة الكل يصوّت يطلع لاعب يشكوا فيه.\n"
-            "3️⃣ اللي ياخد أكتر أصوات يطلع وتتكشف هويته للجميع.\n"
-            f"4️⃣ بعد {MASKS_MAX_ROUNDS} جولات (أو لما يفضل لاعب واحد)، القناع اللي عنده أكتر لاعبين ناجين هو الفايز."
-        ),
-    },
+UNKNOWN_ACTIONS = {
+    "room": "🔎 تفتيش الغرف",
+    "camera": "📹 مراجعة الكاميرات",
+    "witness": "🗣️ استجواب الشاهد",
+    "erase": "🧹 طمس قرينة",
+    "plant": "🧩 زرع قرينة مضللة",
+    "blend": "🎭 التظاهر بالمساعدة",
+    "wait": "لم يختر تحركاً",
 }
 
-ROLE_INFO = {
-    "مافيا": (
-        "مهمتك بالليل إنك تختار مع باقي المافيا (لو فيه أكتر من واحد) ضحية تستهدفوها. "
-        "بالنهار حاول تتصرف طبيعي عشان محدش يشك فيك، وصوّت مع الكل عشان تبعد الشبهة عنك."
-    ),
-    "دكتور": (
-        "مهمتك كل ليلة تختار لاعب واحد (ممكن نفسك) تحميه من القتل. "
-        "لو المافيا استهدفت نفس اللاعب اللي حميته، بينجو. حافظ على هويتك سرية."
-    ),
-    "محقق": (
-        "مهمتك كل ليلة تحقق في لاعب واحد، وحترجع لك نتيجة سرية توضح لو هو مافيا ولا لأ. "
-        "استخدم المعلومة دي في التصويت بالنهار من غير ما تكشف نفسك بسرعة."
-    ),
-    "مواطن": (
-        "معاك مافي قدرة خاصة، بس صوتك مهم بالنهار. راقب تصرفات الناس وحاول تكتشف مين المافيا."
-    ),
-    "مخرب": (
-        "مهمتك تخرب تقدم المهمة من غير ما تنكشف. تقدر كمان تعمل «إصلاح» عشان تتخفى وسط الطاقم."
-    ),
-    "طاقم": (
-        "مهمتك تصلح وتفحص عشان ترفع تقدم المهمة، وتراقب تصرفات زمايلك عشان تكتشف المخرب."
-    ),
-    "هنديل": (
-        "إنت الدور السري الوحيد. حاول تتصرف طبيعي وما تلفت الانتباه لحد ما تخلص الجولات من غير ما ينكشفوا."
-    ),
-    "لاعب": (
-        "دورك عادي. راقب تصرفات الباقين وصوّت مع كل جولة على مين تشك إنه «هنديل»."
-    ),
+UNKNOWN_CLUE_TEMPLATES = {
+    "room": [
+        "أثر زجاج قرب باب الخدمة يربط {name} بمكان الحادث.",
+        "بصمة جزئية وُجدت على ملف الأدلة وتشير إلى {name}.",
+        "بطاقة غرفة ممزقة وُجدت في الممر الذي مرّ منه {name}.",
+    ],
+    "camera": [
+        "التسجيل المتقطع أظهر شخصاً يحمل بطاقة باسم {name} قرب المصعد.",
+        "ظلّ ظهر أمام كاميرا الطابق قبل الحادث بثوانٍ، وتمت مطابقته مع {name}.",
+        "الكاميرا سجلت باب الغرفة 17 يُفتح بعد مرور {name}.",
+    ],
+    "witness": [
+        "الشاهد سمع {name} يسأل عن غرفة الأدلة قبل انقطاع الكهرباء.",
+        "الشاهد وصف صوتاً يشبه صوت {name} قرب المصعد.",
+        "آخر شخص ناقش الملف المفقود مع الشاهد كان {name}.",
+    ],
 }
 
-
-def _role_info_text(role):
-    return ROLE_INFO.get(role, "")
-
-
-def _first_round_hint(session):
-    """توجيه مختصر يظهر مرة واحدة بس مع أول جولة، عشان اللاعبين الجداد يفهموا الآلية بسرعة."""
-    if session.get("round", 0) != 1:
-        return ""
-    how_to = GAME_RULES[session["type"]].get("how_to", "")
-    if not how_to:
-        return ""
-    return f"\n\n🆕 *أول مرة تلعبوا؟*\n{how_to}"
+UNKNOWN_GAME_DB_LOCK = threading.RLock()
+UNKNOWN_GAME_ASYNC_LOCKS = defaultdict(asyncio.Lock)
 
 
-SOLO_RPS_CHOICES = {
-    "rock": "🪨 حجر",
-    "paper": "📄 ورق",
-    "scissors": "✂️ مقص",
-}
+def init_unknown_game_database():
+    """Create the independent, persistent game-session table."""
+    with UNKNOWN_GAME_DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE, timeout=15)
+        try:
+            conn.execute("PRAGMA busy_timeout=15000")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS unknown_game_sessions (
+                    chat_id INTEGER PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-SOLO_RPS_BEATS = {
-    "rock": "scissors",
-    "paper": "rock",
-    "scissors": "paper",
-}
+
+def _unknown_load(chat_id):
+    with UNKNOWN_GAME_DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE, timeout=15)
+        try:
+            row = conn.execute(
+                "SELECT state_json FROM unknown_game_sessions WHERE chat_id = ?",
+                (int(chat_id),),
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+        finally:
+            conn.close()
+
+
+def _unknown_save(session):
+    session["updated_at"] = time.time()
+    payload = json.dumps(session, ensure_ascii=False, separators=(",", ":"))
+    with UNKNOWN_GAME_DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE, timeout=15)
+        try:
+            conn.execute("PRAGMA busy_timeout=15000")
+            conn.execute(
+                """
+                INSERT INTO unknown_game_sessions(chat_id, state_json, updated_at)
+                VALUES(?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    state_json = excluded.state_json,
+                    updated_at = excluded.updated_at
+                """,
+                (int(session["chat_id"]), payload, session["updated_at"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _unknown_all_sessions():
+    with UNKNOWN_GAME_DB_LOCK:
+        conn = sqlite3.connect(DATABASE_FILE, timeout=15)
+        try:
+            rows = conn.execute(
+                "SELECT state_json FROM unknown_game_sessions"
+            ).fetchall()
+            return [json.loads(row[0]) for row in rows]
+        finally:
+            conn.close()
 
 
 def game_requested(text):
     if not text:
         return False
-    t = text.strip().lower().replace("؟", "").replace("?", "")
-    return t in GAME_TRIGGER_WORDS
+    value = text.strip().lower().replace("؟", "").replace("?", "")
+    return value in GAME_TRIGGER_WORDS
 
 
 def game_key(chat_id):
@@ -573,1321 +584,845 @@ def game_key(chat_id):
 
 
 def get_game_session(chat_id):
-    return GAME_SESSIONS.get(game_key(chat_id))
+    return _unknown_load(chat_id)
 
 
-def _act_cb(subaction, chat_id, *extra):
-    parts = ["act", subaction, str(chat_id)] + [str(e) for e in extra]
-    return ":".join(parts)
-
-
-def _parse_act(data):
-    # data already has the leading "act:" stripped by the router
-    parts = data.split(":")
-    subaction = parts[0]
-    chat_id = parts[1] if len(parts) > 1 else "0"
-    extra = parts[2:]
-    try:
-        chat_id = int(chat_id)
-    except ValueError:
-        chat_id = 0
-    return subaction, chat_id, extra
-
-
-def games_menu_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎮 فردية", callback_data="games:solo"),
-            InlineKeyboardButton("👥 جماعية", callback_data="games:group"),
-        ],
-        [InlineKeyboardButton("ℹ️ كيف ألعب؟", callback_data="games:help")],
-    ])
-
-
-def group_games_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🪔 هنديل", callback_data="game:handeel"),
-            InlineKeyboardButton("🕵️ مافيا", callback_data="game:mafia"),
-        ],
-        [
-            InlineKeyboardButton("💰 سرقة البنك", callback_data="game:bank"),
-            InlineKeyboardButton("🏝️ الجزيرة", callback_data="game:island"),
-        ],
-        [
-            InlineKeyboardButton("🚀 سفينة الفضاء", callback_data="game:spaceship"),
-            InlineKeyboardButton("🕵️‍♂️ المدينة المفقودة", callback_data="game:lost_city"),
-        ],
-        [InlineKeyboardButton("🎭 الأقنعة", callback_data="game:masks")],
-        [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
-    ])
-
-
-def solo_games_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✊ حجر ورق مقص", callback_data="game:rps")],
-        [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
-    ])
-
-
-def rps_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(SOLO_RPS_CHOICES["rock"], callback_data=_act_cb("rps", 0, "rock")),
-        InlineKeyboardButton(SOLO_RPS_CHOICES["paper"], callback_data=_act_cb("rps", 0, "paper")),
-        InlineKeyboardButton(SOLO_RPS_CHOICES["scissors"], callback_data=_act_cb("rps", 0, "scissors")),
-    ]])
-
-
-def game_lobby_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🙋 انضم للعبة", callback_data="game:join")],
-        [InlineKeyboardButton("▶️ ابدأ اللعبة", callback_data="game:start")],
-        [InlineKeyboardButton("❌ إلغاء", callback_data="game:cancel")],
-    ])
-
-
-def _player_name(user):
+def _unknown_player_name(user):
     name = getattr(user, "full_name", None) or getattr(user, "first_name", None) or "لاعب"
-    return str(name)[:40]
+    return str(name).replace("\n", " ")[:40]
 
 
-def _session_players(session):
-    return list(session["players"].values())
+def _unknown_players(session):
+    return list(session.get("players", {}).values())
 
 
-def _alive_players(session):
-    return [p for p in _session_players(session) if p["alive"]]
-
-
-def _role_of(session, uid):
-    return session["roles"].get(uid)
-
-
-def _players_keyboard(subaction, chat_id, players, exclude=None, include_skip=True):
-    rows = []
-    for p in players:
-        if exclude is not None and p["id"] == exclude:
-            continue
-        rows.append([InlineKeyboardButton(p["name"], callback_data=_act_cb(subaction, chat_id, p["id"]))])
-    if include_skip:
-        rows.append([InlineKeyboardButton("⏭️ تخطي", callback_data=_act_cb(subaction, chat_id, "skip"))])
-    return InlineKeyboardMarkup(rows)
-
-
-def _new_session(chat_id, game_type, host):
-    return {
-        "type": game_type,
-        "chat_id": chat_id,
-        "status": "lobby",
-        "host_id": host.id,
-        "players": {
-            host.id: {
-                "id": host.id,
-                "name": _player_name(host),
-                "alive": True,
-            }
-        },
-        "roles": {},
-        "data": {},
-        "round": 0,
-        "last_activity": time.time(),
-    }
-
-
-def _touch(session):
-    session["last_activity"] = time.time()
-
-
-def _game_title(game_type):
-    return GAME_RULES[game_type]["name"]
-
-
-def _lobby_text(session):
-    rule = GAME_RULES[session["type"]]
-    players = _session_players(session)
+def _unknown_lobby_text(session):
+    players = _unknown_players(session)
     lines = [
-        f"{rule['name']}",
+        UNKNOWN_GAME_TITLE,
         "",
-        "📖 شرح اللعبة:",
-        rule["description"],
+        "🏨 القضية: اختفاء ملف الأدلة من فندق النخيل.",
+        "ياسمين هي مديرة التحقيق. ما في قائد من اللاعبين؛ كل المشاركين متساوين.",
         "",
-        "📋 كيف تلعب:",
-        rule["how_to"],
+        f"👥 المشاركون حالياً: {len(players)}",
+        "🔐 الخاص: لازم كل لاعب يفتح محادثة ياسمين من زر (تفعيل الخاص) عشان يستلم دوره السري.",
         "",
-        f"👥 العدد: {len(players)}/{rule['max']}",
-        "",
-        "اللاعبون:",
+        "قائمة المشاركين:",
     ]
-    for i, p in enumerate(players, 1):
-        crown = " 👑" if p["id"] == session["host_id"] else ""
-        lines.append(f"{i}. {p['name']}{crown}")
+    for index, player in enumerate(players, 1):
+        ready = "✅" if player.get("private_ready") else "🔒"
+        lines.append(f"{index}. {player['name']} {ready}")
     lines += [
         "",
-        f"🔢 أقل عدد للبدء: {rule['min']}",
-        "اضغط «🙋 انضم للعبة» للدخول، وبعد اكتمال العدد اضغط «▶️ ابدأ اللعبة».",
+        "مافي حد أقصى لعدد المشاركين؛ ياسمين بتوزع الأدوار حسب العدد الموجود.",
+        "أي لاعب يقدر يضغط (ابدأ التحقيق) بعد تفعيل الخاص للجميع.",
     ]
     return "\n".join(lines)
 
 
-async def _send_private(context, user_id, text, reply_markup=None):
-    try:
-        await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
-        return True
-    except Exception:
-        return False
+async def _unknown_lobby_keyboard(context, chat_id):
+    me = await context.bot.get_me()
+    deep_link = f"https://t.me/{me.username}?start=unknown_{chat_id}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🙋 انضم للتحقيق", callback_data=f"unk:join:{chat_id}")],
+        [InlineKeyboardButton("🔐 تفعيل الخاص واستلام الدور", url=deep_link)],
+        [InlineKeyboardButton("🕯️ ياسمين، ابدئي التحقيق", callback_data=f"unk:begin:{chat_id}")],
+        [InlineKeyboardButton("🚪 مغادرة التحقيق", callback_data=f"unk:leave:{chat_id}")],
+    ])
 
 
-async def _announce(context, chat_id, text, reply_markup=None):
-    try:
-        await context.bot.send_message(
-            chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup
+async def _unknown_publish_lobby(context, session, prefer_message=None):
+    chat_id = int(session["chat_id"])
+    latest = _unknown_load(chat_id)
+    if latest and latest.get("status") == "lobby":
+        session = latest
+    keyboard = await _unknown_lobby_keyboard(context, chat_id)
+    text = _unknown_lobby_text(session)
+    message_id = session.get("lobby_message_id")
+    if not session.get("lobby_media_sent"):
+        await _unknown_send_media(
+            context.bot, chat_id, "lobby",
+            caption="🌙 وصلت ياسمين إلى مسرح القضية. التحقيق على وشك أن يبدأ.",
         )
-    except Exception as e:
-        print(f"[GAME ANNOUNCE ERROR]: {type(e).__name__}: {e}")
+        session["lobby_media_sent"] = True
+        _unknown_save(session)
+    try:
+        if prefer_message is not None:
+            await prefer_message.edit_text(text, reply_markup=keyboard)
+            message_id = prefer_message.message_id
+        elif message_id:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+        else:
+            message = await context.bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=keyboard
+            )
+            message_id = message.message_id
+    except Exception as exc:
+        print(f"[UNKNOWN LOBBY UPDATE] {type(exc).__name__}: {exc}")
+        if not message_id:
+            try:
+                message = await context.bot.send_message(
+                    chat_id=chat_id, text=text, reply_markup=keyboard
+                )
+                message_id = message.message_id
+            except Exception:
+                return
+    latest = _unknown_load(chat_id)
+    if latest and latest.get("status") == "lobby":
+        latest["lobby_message_id"] = message_id
+        _unknown_save(latest)
 
-
-def _finish_session(chat_id):
-    GAME_SESSIONS.pop(game_key(chat_id), None)
-
-
-# ----------------------------------------------------------------
-# قوائم / تصفح الألعاب
-# ----------------------------------------------------------------
 
 async def show_games_menu(update, context):
-    await update.message.reply_text(
-        "🎮 *ألعاب ياسمين*\n\n"
-        "اختار نوع الألعاب:\n"
-        "👥 الجماعية: ألعاب تعتمد على أكثر من لاعب داخل نفس القروب.\n"
-        "🎮 الفردية: ألعاب لاعب واحد.",
-        parse_mode="Markdown",
-        reply_markup=games_menu_keyboard(),
+    # Cinematic title image; menu controls remain in the original text message.
+    target_chat_id = update.effective_chat.id if update.effective_chat else None
+    if target_chat_id is not None:
+        await _unknown_send_media(
+            context.bot, target_chat_id, "opening",
+            caption="🕯️ YASMINE: THE UNKNOWN — A GAME OF SECRETS, CHOICES & CONSEQUENCES",
+        )
+    text = (
+        "🎮 ألعاب ياسمين\n\n"
+        "اختار كيف تبدأ:\n"
+        "• إنشاء تحقيق جماعي جديد.\n"
+        "• الانضمام إلى تحقيق مفتوح في نفس القروب.\n"
+        "• تعلّم القواعد أو جرّب تدريباً قصيراً قبل اللعب."
     )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🕯️ إنشاء YASMINE: THE UNKNOWN", callback_data="game:unknown")],
+        [InlineKeyboardButton("🙋 الانضمام إلى تحقيق مفتوح", callback_data="games:join")],
+        [InlineKeyboardButton("📖 تعلّم طريقة اللعب", callback_data="games:learn")],
+        [InlineKeyboardButton("🎯 تجربة تدريبية", callback_data="games:practice")],
+    ])
+    if update.message:
+        await update.message.reply_text(text, reply_markup=keyboard)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=keyboard)
 
 
-async def start_game_lobby(update, context, game_type):
-    chat_id = update.effective_chat.id
-    user = update.effective_user
+async def games_command(update, context):
+    await show_games_menu(update, context)
 
-    if game_type not in GAME_RULES:
+
+async def unknown_start_command(update, context):
+    """Handle the Telegram deep-link that opens the player's private chat."""
+    if not update.message:
+        return
+    args = getattr(context, "args", []) or []
+    payload = args[0] if args else ""
+    if not payload.startswith("unknown_"):
+        await update.message.reply_text(
+            "أهلاً بيك في ياسمين 🌸\nاكتب /games في القروب عشان تبدأ YASMINE: THE UNKNOWN."
+        )
         return
 
-    with GAME_LOCK:
-        old = GAME_SESSIONS.get(game_key(chat_id))
-        if old and old.get("status") not in ("finished", "cancelled"):
-            await update.callback_query.answer(
-                "في لعبة شغالة في القروب حالياً 😂", show_alert=True
+    try:
+        chat_id = int(payload.split("_", 1)[1])
+    except (ValueError, IndexError):
+        await update.message.reply_text("رابط اللعبة غير صحيح. ارجع للقروب واطلب رابطاً جديداً.")
+        return
+
+    user = update.effective_user
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        session = _unknown_load(chat_id)
+        uid = str(user.id)
+        if not session or session.get("status") != "lobby" or uid not in session.get("players", {}):
+            await update.message.reply_text(
+                "ما لقيت ليك مقعد في لوبي مفتوح. ارجع للقروب واضغط (انضم للتحقيق) أولاً."
             )
             return
+        session["players"][uid]["private_ready"] = True
+        _unknown_save(session)
 
-        session = _new_session(chat_id, game_type, user)
-        GAME_SESSIONS[game_key(chat_id)] = session
-
-    await update.callback_query.answer()
-    await update.callback_query.message.reply_text(
-        _lobby_text(session),
-        reply_markup=game_lobby_keyboard(),
+    await update.message.reply_text(
+        "🔐 تم تفعيل الخاص بنجاح!\n\n"
+        "ياسمين حترسل ليك دورك السري هنا عند بداية التحقيق.\n"
+        "ارجع للقروب؛ لما كل المشاركين يفعّلوا الخاص، أي لاعب يقدر يطلب من ياسمين تبدأ."
     )
+    try:
+        await _unknown_publish_lobby(context, session)
+    except Exception:
+        pass
+
+
+async def start_game_lobby(update, context, game_type=None):
+    q = update.callback_query
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type not in ("group", "supergroup"):
+        await q.answer("اللعبة الجماعية لازم تبدأ من قروب تيليجرام.", show_alert=True)
+        return
+
+    chat_id = chat.id
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        current = _unknown_load(chat_id)
+        if current and current.get("status") in ("lobby", "playing"):
+            if time.time() - float(current.get("updated_at", current.get("created_at", 0))) > UNKNOWN_GAME_TTL:
+                current["status"] = "expired"
+                current["phase"] = "finished"
+                _unknown_save(current)
+                current = None
+        if current and current.get("status") in ("lobby", "playing"):
+            if current.get("status") == "lobby":
+                await q.answer("في تحقيق مفتوح بالفعل. انضم ليهو بدل إنشاء نسخة تانية.", show_alert=True)
+                await _unknown_publish_lobby(context, current)
+            else:
+                await q.answer("في تحقيق شغال في القروب حالياً.", show_alert=True)
+            return
+
+        session = {
+            "chat_id": chat_id,
+            "status": "lobby",
+            "phase": "lobby",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "lobby_message_id": None,
+            "players": {
+                str(user.id): {
+                    "id": user.id,
+                    "name": _unknown_player_name(user),
+                    "private_ready": False,
+                }
+            },
+            "roles": {},
+            "round": 0,
+            "actions": {},
+            "clues": [],
+            "votes": {},
+            "case": {},
+        }
+        _unknown_save(session)
+
+    await q.answer("فتحنا التحقيق. ياسمين حتدير كل شيء 🔍")
+    await _unknown_publish_lobby(context, session, prefer_message=q.message)
 
 
 async def join_current_game(update, context):
     q = update.callback_query
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
     user = update.effective_user
-
-    with GAME_LOCK:
-        session = GAME_SESSIONS.get(game_key(chat_id))
-        if not session or session.get("status") != "lobby":
-            await q.answer("مافي لعبة مفتوحة للانضمام.", show_alert=True)
-            return
-
-        rule = GAME_RULES[session["type"]]
-        if user.id in session["players"]:
-            await q.answer("إنت منضم أصلاً 😂")
-            return
-
-        if len(session["players"]) >= rule["max"]:
-            await q.answer("اللعبة وصلت الحد الأقصى.", show_alert=True)
-            return
-
-        session["players"][user.id] = {
-            "id": user.id,
-            "name": _player_name(user),
-            "alive": True,
-        }
-        _touch(session)
-        text = _lobby_text(session)
-
-    await q.answer("انضميت! 🎮")
-    await q.edit_message_text(text, reply_markup=game_lobby_keyboard())
-
-
-async def cancel_current_game(update, context):
-    q = update.callback_query
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-
-    with GAME_LOCK:
-        session = GAME_SESSIONS.get(game_key(chat_id))
-        if not session:
-            await q.answer("مافي لعبة.", show_alert=True)
-            return
-        if user.id != session["host_id"]:
-            await q.answer("بس صاحب اللعبة بقدر يلغيها.", show_alert=True)
-            return
-        GAME_SESSIONS.pop(game_key(chat_id), None)
-
-    await q.answer("اتلغت اللعبة.")
-    await q.edit_message_text("❌ تم إلغاء اللعبة.")
-
-
-def _shuffle_roles(players, roles):
-    ids = [p["id"] for p in players]
-    random.shuffle(ids)
-    return dict(zip(ids, roles))
-
-
-def _choose_roles(game_type, players):
-    n = len(players)
-
-    if game_type == "mafia":
-        mafia_n = max(1, n // 4)
-        roles = ["مافيا"] * mafia_n
-        roles += ["دكتور", "محقق"]
-        roles += ["مواطن"] * max(0, n - len(roles))
-        random.shuffle(roles)
-        return _shuffle_roles(players, roles)
-
-    if game_type == "spaceship":
-        saboteurs = max(1, n // 4)
-        roles = ["مخرب"] * saboteurs + ["طاقم"] * (n - saboteurs)
-        return _shuffle_roles(players, roles)
-
-    if game_type == "masks":
-        role_names = ["القناع الأسود", "القناع الأبيض", "القناع الأحمر", "القناع الذهبي"]
-        roles = [role_names[i % len(role_names)] for i in range(n)]
-        random.shuffle(roles)
-        return _shuffle_roles(players, roles)
-
-    if game_type == "handeel":
-        roles = ["هنديل"] + ["لاعب"] * (n - 1)
-        random.shuffle(roles)
-        return _shuffle_roles(players, roles)
-
-    # الألعاب الأخرى تعتمد على تعاون جماعي وليست أدوار خفية متضاربة.
-    return {p["id"]: "لاعب" for p in players}
-
-
-async def _begin_game(update, context):
-    q = update.callback_query
-    chat_id = update.effective_chat.id
-    user = update.effective_user
-
-    with GAME_LOCK:
-        session = GAME_SESSIONS.get(game_key(chat_id))
-        if not session or session.get("status") != "lobby":
-            await q.answer("مافي لعبة جاهزة.", show_alert=True)
-            return
-
-        rule = GAME_RULES[session["type"]]
-        if user.id != session["host_id"]:
-            await q.answer("بس صاحب اللعبة بقدر يبدأها.", show_alert=True)
-            return
-
-        if len(session["players"]) < rule["min"]:
-            await q.answer(f"محتاجين على الأقل {rule['min']} لاعبين.", show_alert=True)
-            return
-
-        session["status"] = "playing"
-        session["round"] = 1
-        session["roles"] = _choose_roles(session["type"], _session_players(session))
-        _touch(session)
-
-    await q.answer("بدأت اللعبة! 🔥")
-
-    # إرسال الأدوار في الخاص لو اللعبة عندها أدوار سرية فردية
-    if session["type"] in ("mafia", "spaceship", "masks", "handeel"):
-        failed_dm = []
-        for uid, role in session["roles"].items():
-            if session["type"] == "masks":
-                info = "حافظ على هويتك سرية، راقب تصرفات الباقين، وحاول ما تنطلع بالتصويت."
-            else:
-                info = _role_info_text(role)
-            role_text = f"🎭 دورك في {_game_title(session['type'])}:\n\n🔐 {role}\n\n"
-            if info:
-                role_text += f"📌 {info}\n\n"
-            role_text += "ما ترسل دورك للناس في القروب."
-            ok = await _send_private(context, uid, role_text)
-            if not ok:
-                failed_dm.append(uid)
-        if failed_dm:
-            names = ", ".join(session["players"][uid]["name"] for uid in failed_dm)
-            await q.message.reply_text(
-                f"⚠️ ما قدرت أبعت رسالة خاصة لـ: {names}\n"
-                "لازم يبدأوا محادثة خاصة معايا أول مرة عشان أقدر أبعتلك أدوارهم."
-            )
-
-    await _start_round(update, context, session)
-
-
-# ----------------------------------------------------------------
-# بداية كل جولة حسب نوع اللعبة
-# ----------------------------------------------------------------
-
-async def _start_round(update, context, session):
-    game_type = session["type"]
-    chat_id = session["chat_id"]
-
-    if game_type == "mafia":
-        await _mafia_start_night(context, session)
-    elif game_type == "spaceship":
-        await _space_start_action_phase(context, session)
-    elif game_type == "bank":
-        await _bank_start_round(context, session)
-    elif game_type == "island":
-        await _island_start_day(context, session)
-    elif game_type == "lost_city":
-        await _city_start_stage(context, session)
-    elif game_type == "handeel":
-        await _handeel_start_round(context, session)
-    elif game_type == "masks":
-        await _masks_start_round(context, session)
-    else:
-        await _announce(context, chat_id, "🎮 بدأت اللعبة.")
-
-
-# ================================================================
-# 🕵️ مافيا
-# ================================================================
-
-def _mafia_alive_by_role(session, role):
-    return [p for p in _alive_players(session) if _role_of(session, p["id"]) == role]
-
-
-async def _mafia_start_night(context, session):
-    session["data"]["phase"] = "night"
-    session["data"]["night"] = {"mafia_votes": {}, "protect": None, "inspect": None}
-    _touch(session)
-    chat_id = session["chat_id"]
-
-    alive_mafia = _mafia_alive_by_role(session, "مافيا")
-    alive_doctor = _mafia_alive_by_role(session, "دكتور")
-    alive_detective = _mafia_alive_by_role(session, "محقق")
-    alive = _alive_players(session)
-
-    for m in alive_mafia:
-        await _send_private(
-            context, m["id"],
-            f"🌙 الليل نزل — الجولة {session['round']}\nاختار هدف المافيا:",
-            _players_keyboard("mtarget", chat_id, alive, exclude=m["id"], include_skip=False),
-        )
-    for d in alive_doctor:
-        await _send_private(
-            context, d["id"],
-            f"🩺 الليل نزل — الجولة {session['round']}\nاختار لاعباً تحميه:",
-            _players_keyboard("mprotect", chat_id, alive, include_skip=False),
-        )
-    for det in alive_detective:
-        await _send_private(
-            context, det["id"],
-            f"🔎 الليل نزل — الجولة {session['round']}\nاختار لاعباً تحقق فيه:",
-            _players_keyboard("minspect", chat_id, alive, exclude=det["id"], include_skip=False),
-        )
-
-    await _announce(
-        context, chat_id,
-        f"🌙 *مافيا — الليل {session['round']}*\n\n"
-        "المافيا والدكتور والمحقق استلموا أزرارهم في الخاص.\n"
-        "باقي اللاعبين استنوا، الصبح جاي."
-        f"{_first_round_hint(session)}",
-        InlineKeyboardMarkup([[
-            InlineKeyboardButton("⏭️ فرض الصباح (الهوست)", callback_data=_act_cb("mforce", chat_id))
-        ]]),
-    )
-
-
-def _mafia_night_ready(session):
-    data = session["data"]
-    alive_mafia = _mafia_alive_by_role(session, "مافيا")
-    alive_doctor = _mafia_alive_by_role(session, "دكتور")
-    alive_detective = _mafia_alive_by_role(session, "محقق")
-
-    mafia_done = all(m["id"] in data["night"]["mafia_votes"] for m in alive_mafia) if alive_mafia else True
-    doctor_done = (not alive_doctor) or data["night"]["protect"] is not None
-    detective_done = (not alive_detective) or data["night"]["inspect"] is not None
-    return mafia_done and doctor_done and detective_done
-
-
-async def _mafia_check_win(context, session):
-    alive_mafia = _mafia_alive_by_role(session, "مافيا")
-    alive_town = [p for p in _alive_players(session) if _role_of(session, p["id"]) != "مافيا"]
-
-    if not alive_mafia:
-        await _announce(context, session["chat_id"], "🎉 *انتهت اللعبة!*\n\nالمواطنون فازوا، المافيا كلها طاحت! 🏆")
-        _finish_session(session["chat_id"])
-        return True
-    if len(alive_mafia) >= len(alive_town):
-        await _announce(context, session["chat_id"], "🎉 *انتهت اللعبة!*\n\nالمافيا فازت وسيطرت على المدينة! 🕵️")
-        _finish_session(session["chat_id"])
-        return True
-    return False
-
-
-async def _mafia_resolve_night(context, session):
-    data = session["data"]["night"]
-    chat_id = session["chat_id"]
-
-    votes = list(data["mafia_votes"].values())
-    votes = [v for v in votes if v != "skip"]
-    target = None
-    if votes:
-        counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        target = random.choice([k for k, c in counts.items() if c == top])
-
-    protect = data["protect"]
-    if protect == "skip":
-        protect = None
-
-    inspect = data["inspect"]
-
-    lines = [f"☀️ *مافيا — صباح الجولة {session['round']}*", ""]
-
-    if target and target != protect and target in session["players"]:
-        session["players"][target]["alive"] = False
-        lines.append(f"💀 اتلقى {session['players'][target]['name']} مقتولاً الليلة.")
-    elif target and target == protect:
-        lines.append("🩺 حاول حد يموت الليلة بس الدكتور حماه!")
-    else:
-        lines.append("😌 محدش مات الليلة.")
-
-    lines.append("\nناقشوا وصوّتوا على من تشكوا فيه.")
-
-    await _announce(context, chat_id, "\n".join(lines))
-
-    if inspect and inspect != "skip":
-        for det in _mafia_alive_by_role(session, "محقق"):
-            is_mafia = _role_of(session, inspect) == "مافيا"
-            target_name = session["players"].get(inspect, {}).get("name", "؟")
-            verdict = "مافيا 🔴" if is_mafia else "بريء 🟢"
-            await _send_private(context, det["id"], f"🔎 نتيجة تحقيقك عن {target_name}: {verdict}")
-
-    if await _mafia_check_win(context, session):
+    if not chat or chat.type not in ("group", "supergroup"):
+        await q.answer("الانضمام للتحقيق بيكون من القروب.", show_alert=True)
         return
-
-    # الانتقال للتصويت النهاري
-    session["data"]["phase"] = "day"
-    session["data"]["day_votes"] = {}
-    _touch(session)
-
-    alive = _alive_players(session)
-    await _announce(
-        context, chat_id,
-        "🗳️ صوّتوا على مين تحسوا إنه المافيا:",
-        _players_keyboard("mvote", chat_id, alive, include_skip=True),
-    )
-
-
-async def _mafia_resolve_day(context, session):
-    data = session["data"]["day_votes"]
-    chat_id = session["chat_id"]
-
-    votes = [v for v in data.values() if v != "skip"]
-    lines = [f"🗳️ *نتيجة التصويت — الجولة {session['round']}*", ""]
-
-    if votes:
-        counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        top_candidates = [k for k, c in counts.items() if c == top]
-        if len(top_candidates) > 1:
-            lines.append("⚖️ التصويت تعادل، محدش طلع.")
+    chat_id = chat.id
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "lobby":
+            await q.answer("مافي تحقيق مفتوح للانضمام حالياً.", show_alert=True)
+            return
+        uid = str(user.id)
+        if uid in session["players"]:
+            await q.answer("إنت مسجل بالفعل. فعّل الخاص لو لسه ما فعلتو.", show_alert=True)
         else:
-            out_id = top_candidates[0]
-            role = _role_of(session, out_id)
-            session["players"][out_id]["alive"] = False
-            reveal = "وطلع مافيا 🔴!" if role == "مافيا" else f"وطلع {role} 🟢 (بريء)."
-            lines.append(f"👉 {session['players'][out_id]['name']} طلع من اللعبة {reveal}")
+            session["players"][uid] = {
+                "id": user.id,
+                "name": _unknown_player_name(user),
+                "private_ready": False,
+            }
+            _unknown_save(session)
+            await q.answer("انضميت للتحقيق. فعّل الخاص من الزر الموجود في اللوبي.")
+    await _unknown_publish_lobby(context, session)
+
+
+async def leave_unknown_game(update, context, chat_id):
+    q = update.callback_query
+    user = update.effective_user
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        session = _unknown_load(chat_id)
+        uid = str(user.id)
+        if not session or session.get("status") != "lobby" or uid not in session.get("players", {}):
+            await q.answer("ما عندك مقعد في لوبي مفتوح.", show_alert=True)
+            return
+        session["players"].pop(uid, None)
+        if not session["players"]:
+            session["status"] = "finished"
+            session["phase"] = "finished"
+            _unknown_save(session)
+            await q.answer("اتقفل اللوبي لعدم وجود لاعبين.")
+            try:
+                await q.edit_message_text("🚪 اتقفل التحقيق؛ ما فضل أي مشارك.")
+            except Exception:
+                pass
+            return
+        _unknown_save(session)
+    await q.answer("غادرت اللوبي.")
+    await _unknown_publish_lobby(context, session)
+
+
+def _unknown_assign_roles(players):
+    """Scale the hidden saboteur team with attendance; no hard maximum player count."""
+    ids = [str(player["id"]) for player in players]
+    random.shuffle(ids)
+    saboteur_count = max(1, len(ids) // 8)
+    saboteur_count = min(saboteur_count, max(1, len(ids) // 2))
+    roles = {uid: "المتلاعب" for uid in ids[:saboteur_count]}
+    role_pool = list(UNKNOWN_INVESTIGATION_ROLES)
+    random.shuffle(role_pool)
+    for index, uid in enumerate(ids[saboteur_count:]):
+        roles[uid] = role_pool[index % len(role_pool)]
+    return roles
+
+
+def _unknown_action_keyboard(chat_id, role):
+    if role == "المتلاعب":
+        choices = [
+            ("erase", UNKNOWN_ACTIONS["erase"]),
+            ("plant", UNKNOWN_ACTIONS["plant"]),
+            ("blend", UNKNOWN_ACTIONS["blend"]),
+        ]
     else:
-        lines.append("⚖️ محدش صوّت، محدش طلع.")
-
-    await _announce(context, chat_id, "\n".join(lines))
-
-    if await _mafia_check_win(context, session):
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _mafia_start_night(context, session)
-
-
-# ================================================================
-# 🚀 سفينة الفضاء
-# ================================================================
-
-def _space_alive_saboteurs(session):
-    return [p for p in _alive_players(session) if _role_of(session, p["id"]) == "مخرب"]
+        choices = [
+            ("room", UNKNOWN_ACTIONS["room"]),
+            ("camera", UNKNOWN_ACTIONS["camera"]),
+            ("witness", UNKNOWN_ACTIONS["witness"]),
+        ]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data=f"unk:act:{chat_id}:{key}")]
+        for key, label in choices
+    ])
 
 
-async def _space_start_action_phase(context, session):
-    session["data"].setdefault("progress", 0)
-    session["data"]["phase"] = "action"
-    session["data"]["actions"] = {}
-    _touch(session)
-    chat_id = session["chat_id"]
+async def _unknown_send_round(application, session):
+    chat_id = int(session["chat_id"])
+    round_no = int(session["round"])
+    await _unknown_send_media(
+        application.bot, chat_id, f"round_{round_no}",
+        caption=UNKNOWN_SCENES[round_no],
+    )
+    for uid, player in session["players"].items():
+        role = session["roles"].get(uid, "محقق")
+        prompt = (
+            f"🕯️ {UNKNOWN_GAME_TITLE}\n"
+            f"المرحلة {round_no} من {UNKNOWN_ROUNDS}\n\n"
+            f"دورك السري: {role}\n"
+            f"اختار تحركك الآن. عندك تحرك واحد في المرحلة دي."
+        )
+        try:
+            await application.bot.send_message(
+                chat_id=int(uid),
+                text=prompt,
+                reply_markup=_unknown_action_keyboard(chat_id, role),
+            )
+        except Exception as exc:
+            print(f"[UNKNOWN DM ERROR] uid={uid}: {type(exc).__name__}: {exc}")
+    _unknown_schedule_timer(application, chat_id, "actions", round_no, session["deadline"])
 
-    await _announce(
-        context, chat_id,
-        f"🚀 *سفينة الفضاء — الجولة {session['round']}*\n\n"
-        f"📈 تقدّم المهمة: {session['data']['progress']}\n\n"
-        "كل لاعب يختار فعله سراً (إصلاح يرفع التقدم، تخريب يخفضه، الفحص للمعلومات فقط):"
-        f"{_first_round_hint(session)}",
-        game_action_keyboard_dynamic("s", session["chat_id"], [
-            ("repair", "🔧 إصلاح"),
-            ("sabotage", "💥 تخريب"),
-            ("scan", "🔎 فحص لاعب"),
-        ]),
+
+async def begin_unknown_game(update, context, chat_id):
+    q = update.callback_query
+    user = update.effective_user
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "lobby":
+            await q.answer("مافي تحقيق جاهز للبداية.", show_alert=True)
+            return
+        if str(user.id) not in session["players"]:
+            await q.answer("لازم تنضم للتحقيق أولاً.", show_alert=True)
+            return
+        players = _unknown_players(session)
+        if len(players) < 2:
+            await q.answer("محتاجين لاعبين على الأقل عشان تبدأ القضية.", show_alert=True)
+            return
+        missing = [p["name"] for p in players if not p.get("private_ready")]
+        if missing:
+            await q.answer("باقي تفعيل الخاص لبعض المشاركين.", show_alert=True)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔐 ياسمين منتظرة تفعيل الخاص من:\n" + "\n".join(f"• {name}" for name in missing),
+            )
+            return
+
+        session["roles"] = _unknown_assign_roles(players)
+        culprit_ids = [uid for uid, role in session["roles"].items() if role == "المتلاعب"]
+        session["case"] = {"culprit_ids": culprit_ids}
+        session["status"] = "playing"
+        session["phase"] = "actions"
+        session["round"] = 1
+        session["actions"] = {}
+        session["clues"] = []
+        session["votes"] = {}
+        session["deadline"] = time.time() + UNKNOWN_ACTION_SECONDS
+        _unknown_save(session)
+
+    await q.answer("بدأ التحقيق! ياسمين وزّعت الأدوار 🔐")
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"🕯️ {UNKNOWN_GAME_TITLE}\n\n"
+            f"بدأ التحقيق بمشاركة {len(players)} لاعبين.\n"
+            "مافي قائد بشري؛ ياسمين هي المديرة، وكل لاعب استلم دوراً سرياً في الخاص.\n"
+            "الجولة سريعة: كل لاعب يختار تحركاً واحداً في الخاص، وبعد 3 مراحل حيكون التصويت النهائي."
+        ),
     )
 
+    failed = []
+    for uid, role in session["roles"].items():
+        info = UNKNOWN_ROLE_INFO.get(role, UNKNOWN_ROLE_INFO["مساعد التحقيق"])
+        allies = [
+            session["players"][other_uid]["name"]
+            for other_uid, other_role in session["roles"].items()
+            if other_role == "المتلاعب" and other_uid != uid
+        ]
+        ally_text = ("\n\nزملاؤك في فريق المتلاعبين: " + "، ".join(allies)) if allies else ""
+        try:
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text=(
+                    f"🔐 دورك السري في {UNKNOWN_GAME_TITLE}\n\n"
+                    f"🎭 {role}\n\n{info}{ally_text}\n\n"
+                    "ممنوع ترسل الدور أو صورة الرسالة لأي لاعب."
+                ),
+            )
+        except Exception:
+            failed.append(uid)
 
-def game_action_keyboard_dynamic(prefix, chat_id, options):
+    if failed:
+        async with lock:
+            current = _unknown_load(chat_id)
+            if current and current.get("status") == "playing":
+                for uid in failed:
+                    if uid in current["players"]:
+                        current["players"][uid]["private_ready"] = False
+                current["status"] = "lobby"
+                current["phase"] = "lobby"
+                current["roles"] = {}
+                current["case"] = {}
+                current["round"] = 0
+                _unknown_save(current)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ ما قدرت ياسمين ترسل الأدوار لكل المشاركين. رجعنا اللوبي؛ خلي اللاعبين المتأثرين يفتحوا الخاص من زر التفعيل ثم ابدأوا من جديد.",
+        )
+        await _unknown_publish_lobby(context, current)
+        return
+
+    await _unknown_send_round(context.application, session)
+
+
+def _unknown_make_clue(session, action, role):
+    players = session["players"]
+    culprit_ids = {str(uid) for uid in session["case"]["culprit_ids"]}
+    all_ids = list(players.keys())
+    if action not in UNKNOWN_CLUE_TEMPLATES:
+        return None
+
+    bonus = 0.18 if (
+        (role == "خبير الأدلة" and action == "room")
+        or (role == "مسؤول الأمن" and action == "camera")
+        or (role == "الشاهد" and action == "witness")
+    ) else 0.0
+    is_true = random.random() < min(0.9, 0.66 + bonus)
+    if is_true:
+        target_id = random.choice(list(culprit_ids))
+    else:
+        alternatives = [uid for uid in all_ids if uid not in culprit_ids]
+        target_id = random.choice(alternatives) if alternatives else random.choice(list(culprit_ids))
+    name = players[target_id]["name"]
+    template = random.choice(UNKNOWN_CLUE_TEMPLATES[action])
+    return {
+        "text": template.format(name=name),
+        "target_id": target_id,
+        "real": bool(is_true),
+        "source": action,
+    }
+
+
+def _unknown_vote_keyboard(session):
+    chat_id = int(session["chat_id"])
     rows = []
-    for key, label in options:
-        rows.append([InlineKeyboardButton(label, callback_data=_act_cb(f"{prefix}_{key}", chat_id))])
+    for uid, player in session["players"].items():
+        rows.append([
+            InlineKeyboardButton(
+                f"🗳️ {player['name']}",
+                callback_data=f"unk:vote:{chat_id}:{uid}",
+            )
+        ])
     return InlineKeyboardMarkup(rows)
 
 
-async def _space_check_win(context, session):
-    alive_sab = _space_alive_saboteurs(session)
-    alive_crew = [p for p in _alive_players(session) if _role_of(session, p["id"]) != "مخرب"]
-    progress = session["data"].get("progress", 0)
+async def _unknown_resolve_round(application, chat_id, expected_round, force=False):
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    next_session = None
+    new_clues = []
+    async with lock:
+        session = _unknown_load(chat_id)
+        if (
+            not session
+            or session.get("status") != "playing"
+            or session.get("phase") != "actions"
+            or int(session.get("round", 0)) != int(expected_round)
+        ):
+            return
+        actions = session.get("actions", {})
+        player_ids = list(session["players"].keys())
+        if len(actions) < len(player_ids) and not force:
+            return
+        for uid in player_ids:
+            actions.setdefault(uid, "wait")
 
-    if not alive_sab or progress >= 8:
-        await _announce(context, session["chat_id"], "🎉 *انتهت اللعبة!*\n\nالطاقم أكمل المهمة وطرد كل المخربين! 🏆")
-        _finish_session(session["chat_id"])
-        return True
-    if len(alive_sab) >= len(alive_crew) or progress <= -6:
-        await _announce(context, session["chat_id"], "💥 *انتهت اللعبة!*\n\nالمخربون نجحوا في إسقاط المهمة!")
-        _finish_session(session["chat_id"])
-        return True
-    return False
+        # Investigation actions create uncertain clues. The hidden saboteur can erase or plant evidence.
+        for uid, action in actions.items():
+            role = session["roles"].get(uid, "محقق")
+            if action in UNKNOWN_CLUE_TEMPLATES:
+                clue = _unknown_make_clue(session, action, role)
+                if clue:
+                    session["clues"].append(clue)
+                    new_clues.append(clue)
+            elif role == "المتلاعب" and action == "plant":
+                culprit_ids = set(session["case"]["culprit_ids"])
+                innocent_ids = [pid for pid in player_ids if pid not in culprit_ids]
+                target_id = random.choice(innocent_ids) if innocent_ids else player_ids[0]
+                name = session["players"][target_id]["name"]
+                clue = {
+                    "text": f"قرينة مزروعة: بطاقة دخول باسم {name} وُجدت قرب غرفة الأدلة.",
+                    "target_id": target_id,
+                    "real": False,
+                    "source": "planted",
+                }
+                session["clues"].append(clue)
+                new_clues.append(clue)
+            elif role == "المتلاعب" and action == "erase":
+                if session["clues"]:
+                    removed = session["clues"].pop()
+                    if removed in new_clues:
+                        new_clues.remove(removed)
+                    new_clues.append({
+                        "text": "🧹 لاحظت ياسمين أن قرينة من ملف التحقيق تم طمسها.",
+                        "target_id": None,
+                        "real": False,
+                        "source": "erased",
+                    })
+                else:
+                    new_clues.append({
+                        "text": "🧹 محاولة طمس دليل، لكن ما كان في قرينة قابلة للإزالة.",
+                        "target_id": None,
+                        "real": False,
+                        "source": "erased",
+                    })
+            elif role == "المتلاعب" and action == "blend":
+                new_clues.append({
+                    "text": "🎭 أحد المشاركين قدّم مساعدة شكلية دون نتيجة واضحة.",
+                    "target_id": None,
+                    "real": False,
+                    "source": "blend",
+                })
 
-
-async def _space_resolve_action(context, session):
-    data = session["data"]
-    chat_id = session["chat_id"]
-    delta = 0
-    for uid, act in data["actions"].items():
-        if act == "s_repair":
-            delta += 1
-        elif act == "s_sabotage":
-            delta -= 2
-    data["progress"] = data.get("progress", 0) + delta
-
-    scans = [uid for uid, act in data["actions"].items() if act == "s_scan"]
-    alive = _alive_players(session)
-    for uid in scans:
-        others = [p for p in alive if p["id"] != uid]
-        if others:
-            target = random.choice(others)
-            is_sab = _role_of(session, target["id"]) == "مخرب"
-            verdict = "مشبوه 🔴" if is_sab else "نظيف 🟢"
-            await _send_private(context, uid, f"🔎 نتيجة فحصك على {target['name']}: {verdict}")
-
-    await _announce(
-        context, chat_id,
-        f"📊 تحديث التقدم: {data['progress']} (تغيّر: {delta:+d})"
-    )
-
-    if await _space_check_win(context, session):
-        return
-
-    session["data"]["phase"] = "vote"
-    session["data"]["votes"] = {}
-    _touch(session)
-    await _announce(
-        context, chat_id,
-        "🗳️ صوّتوا على مين تشكوا إنه مخرب:",
-        _players_keyboard("svote", chat_id, alive, include_skip=True),
-    )
-
-
-async def _space_resolve_vote(context, session):
-    data = session["data"]["votes"]
-    chat_id = session["chat_id"]
-    votes = [v for v in data.values() if v != "skip"]
-    lines = [f"🗳️ *نتيجة تصويت الطرد — الجولة {session['round']}*", ""]
-
-    if votes:
-        counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        top_candidates = [k for k, c in counts.items() if c == top]
-        if len(top_candidates) > 1:
-            lines.append("⚖️ التصويت تعادل، محدش طرد.")
+        session["actions"] = {}
+        if int(session["round"]) < UNKNOWN_ROUNDS:
+            session["round"] = int(session["round"]) + 1
+            session["phase"] = "actions"
+            session["deadline"] = time.time() + UNKNOWN_ACTION_SECONDS
+            next_session = session
         else:
-            out_id = top_candidates[0]
-            role = _role_of(session, out_id)
-            session["players"][out_id]["alive"] = False
-            reveal = "وطلع مخرب 🔴!" if role == "مخرب" else "وطلع طاقم 🟢 (بريء)."
-            lines.append(f"👉 {session['players'][out_id]['name']} اتطرد {reveal}")
+            session["phase"] = "vote"
+            session["votes"] = {}
+            session["deadline"] = time.time() + UNKNOWN_VOTE_SECONDS
+            next_session = session
+        _unknown_save(session)
+
+    if new_clues:
+        clue_lines = [f"{i}. {clue['text']}" for i, clue in enumerate(new_clues, 1)]
+        clue_text = "\n".join(clue_lines)
     else:
-        lines.append("⚖️ محدش صوّت.")
-
-    await _announce(context, chat_id, "\n".join(lines))
-
-    if await _space_check_win(context, session):
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _space_start_action_phase(context, session)
-
-
-# ================================================================
-# 💰 سرقة البنك
-# ================================================================
-
-async def _bank_start_round(context, session):
-    session["data"].setdefault("money", 100)
-    session["data"].setdefault("alarm", 0)
-    session["data"]["actions"] = {}
-    _touch(session)
-    chat_id = session["chat_id"]
-
-    await _announce(
-        context, chat_id,
-        f"💰 *سرقة البنك — الجولة {session['round']}/{BANK_MAX_ROUNDS}*\n\n"
-        f"💵 الغنيمة المحتملة: {session['data']['money']}\n"
-        f"🚨 الإنذار: {session['data']['alarm']}/5\n\n"
-        "كل لاعب يختار فعله لهذي الجولة:"
-        f"{_first_round_hint(session)}",
-        game_action_keyboard_dynamic("bk", chat_id, [
-            ("plan", "🧠 التخطيط"),
-            ("hack", "💻 اختراق"),
-            ("enter", "🚪 الدخول"),
-            ("escape", "🏃 محاولة الهروب"),
-        ]),
+        clue_text = "ما ظهرت قرائن جديدة في المرحلة دي."
+    await _unknown_send_media(
+        application.bot, chat_id, "evidence",
+        caption=f"🧾 نتائج المرحلة {expected_round}:\n\n{clue_text}",
     )
 
-
-async def _bank_resolve_round(context, session, forced_escape=False):
-    data = session["data"]
-    chat_id = session["chat_id"]
-    actions = data.get("actions", {})
-    alive = _alive_players(session)
-
-    escape_votes = sum(1 for a in actions.values() if a == "bk_escape")
-    if forced_escape or (alive and escape_votes > len(alive) / 2):
-        success = data["alarm"] <= 3
-        if success:
-            await _announce(
-                context, chat_id,
-                f"🏃 *الفريق هرب!*\n\n💰 نجحت العملية بغنيمة {data['money']} نقطة! 🏆"
-            )
-        else:
-            await _announce(
-                context, chat_id,
-                "🚨 *الإنذار كان مرتفع جداً!*\n\nالفريق اتمسك والعملية فشلت. 💥"
-            )
-        _finish_session(chat_id)
-        return
-
-    for act in actions.values():
-        if act == "bk_plan":
-            data["alarm"] = max(0, data["alarm"] - 1)
-        elif act == "bk_hack":
-            data["alarm"] += random.choice([0, 1, 2])
-        elif act == "bk_enter":
-            data["alarm"] += random.choice([0, 1])
-    data["alarm"] = min(5, data["alarm"])
-
-    if data["alarm"] >= 5:
-        await _announce(context, chat_id, "🚨 *وصل الإنذار للحد الأقصى!*\n\nالعملية فشلت والفريق اتمسك. 💥")
-        _finish_session(chat_id)
-        return
-
-    if session["round"] >= BANK_MAX_ROUNDS:
-        await _bank_resolve_round(context, session, forced_escape=True)
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _bank_start_round(context, session)
-
-
-# ================================================================
-# 🏝️ الجزيرة
-# ================================================================
-
-async def _island_start_day(context, session):
-    data = session["data"]
-    data.setdefault("food", 100)
-    data.setdefault("water", 100)
-    data.setdefault("energy", 100)
-    data["actions"] = {}
-    _touch(session)
-    chat_id = session["chat_id"]
-
-    await _announce(
-        context, chat_id,
-        f"🏝️ *الجزيرة — اليوم {session['round']}/{ISLAND_MAX_DAYS}*\n\n"
-        f"🍖 الطعام: {data['food']}\n💧 الماء: {data['water']}\n⚡ الطاقة: {data['energy']}\n\n"
-        "كل لاعب يختار مهمته اليوم:"
-        f"{_first_round_hint(session)}",
-        game_action_keyboard_dynamic("is", chat_id, [
-            ("food", "🍖 البحث عن طعام"),
-            ("water", "💧 البحث عن ماء"),
-            ("shelter", "🏕️ بناء مأوى"),
-            ("rest", "😴 الراحة"),
-        ]),
-    )
-
-
-async def _island_resolve_day(context, session):
-    data = session["data"]
-    chat_id = session["chat_id"]
-    actions = data.get("actions", {})
-    n_players = max(1, len(_alive_players(session)))
-
-    food_gain = sum(15 for a in actions.values() if a == "is_food")
-    water_gain = sum(15 for a in actions.values() if a == "is_water")
-    rest_gain = sum(10 for a in actions.values() if a == "is_rest")
-    shelter_count = sum(1 for a in actions.values() if a == "is_shelter")
-
-    data["food"] = max(0, min(100, data["food"] - 5 * n_players + food_gain))
-    data["water"] = max(0, min(100, data["water"] - 7 * n_players + water_gain))
-    data["energy"] = max(0, min(100, data["energy"] - 4 * shelter_count + rest_gain))
-
-    await _announce(
-        context, chat_id,
-        f"📊 *نهاية اليوم {session['round']}*\n\n"
-        f"🍖 الطعام: {data['food']}\n💧 الماء: {data['water']}\n⚡ الطاقة: {data['energy']}"
-    )
-
-    if data["food"] <= 0 or data["water"] <= 0:
-        await _announce(chat_id=chat_id, context=context, text="💀 *انتهت اللعبة!*\n\nنفدت الموارد ولم ينجُ الفريق.")
-        _finish_session(chat_id)
-        return
-
-    if session["round"] >= ISLAND_MAX_DAYS:
-        await _announce(context, chat_id, "🎉 *انتهت اللعبة!*\n\nالفريق نجا لآخر يوم! 🏆")
-        _finish_session(chat_id)
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _island_start_day(context, session)
-
-
-# ================================================================
-# 🕵️‍♂️ المدينة المفقودة
-# ================================================================
-
-async def _city_start_stage(context, session):
-    data = session["data"]
-    data.setdefault("health", 100)
-    data["votes"] = {}
-    data["safe_path"] = random.choice(["left", "center", "right"])
-    _touch(session)
-    chat_id = session["chat_id"]
-
-    await _announce(
-        context, chat_id,
-        f"🕵️‍♂️ *المدينة المفقودة — المرحلة {session['round']}/{CITY_MAX_STAGES}*\n\n"
-        f"❤️ صحة الفريق: {data['health']}\n\n"
-        "قدامكم 3 طرق، واحدة آمنة والباقي فيها خطر. اتفقوا وصوّتوا:"
-        f"{_first_round_hint(session)}",
-        game_action_keyboard_dynamic("cy", chat_id, [
-            ("left", "🚪 الطريق الأيسر"),
-            ("center", "🗿 الطريق الأوسط"),
-            ("right", "🌑 الطريق الأيمن"),
-        ]),
-    )
-
-
-async def _city_resolve_stage(context, session):
-    data = session["data"]
-    chat_id = session["chat_id"]
-    votes = list(data["votes"].values())
-
-    if votes:
-        counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        chosen = random.choice([k for k, c in counts.items() if c == top])
+    if next_session["phase"] == "actions":
+        await _unknown_send_round(application, next_session)
     else:
-        chosen = random.choice(["cy_left", "cy_center", "cy_right"])
-
-    chosen_path = chosen.split("_")[1]
-    safe = chosen_path == data["safe_path"]
-
-    if safe:
-        await _announce(context, chat_id, f"✅ اخترتوا الطريق الصح! نجوتوا من المرحلة {session['round']} بسلام.")
-    else:
-        dmg = random.randint(15, 30)
-        data["health"] = max(0, data["health"] - dmg)
-        await _announce(
-            context, chat_id,
-            f"⚠️ الطريق ده فيه فخ! خسرتوا {dmg} من صحة الفريق.\n❤️ الصحة المتبقية: {data['health']}"
+        await _unknown_send_media(
+            application.bot, chat_id, "voting",
+            caption=(
+                "⚖️ وصلنا للحظة الحسم!\n\n"
+                "راجعوا القرائن الثلاثة، وبعدها كل لاعب يصوّت سراً من الأزرار أدناه. "
+                "ياسمين حتعلن النتيجة بعد اكتمال التصويت أو انتهاء الوقت."
+            ),
+            reply_markup=_unknown_vote_keyboard(next_session),
+        )
+        _unknown_schedule_timer(
+            application, chat_id, "vote", int(next_session["round"]), next_session["deadline"]
         )
 
-    if data["health"] <= 0:
-        await _announce(context, chat_id, "💀 *انتهت اللعبة!*\n\nالفريق ما قدر يكمل المغامرة.")
-        _finish_session(chat_id)
-        return
 
-    if session["round"] >= CITY_MAX_STAGES:
-        await _announce(context, chat_id, "🎉 *انتهت اللعبة!*\n\nالفريق وصل لآخر المدينة المفقودة وطلع فايز! 🏆")
-        _finish_session(chat_id)
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _city_start_stage(context, session)
-
-
-# ================================================================
-# 🪔 هنديل
-# ================================================================
-
-async def _handeel_start_round(context, session):
-    session["data"]["votes"] = {}
-    _touch(session)
-    chat_id = session["chat_id"]
-    alive = _alive_players(session)
-
-    await _announce(
-        context, chat_id,
-        f"🪔 *هنديل — الجولة {session['round']}/{HANDEEL_MAX_ROUNDS}*\n\n"
-        "في لاعب واحد بينكم حامل الدور السري «هنديل». ناقشوا وصوّتوا على من تشكوا فيه:"
-        f"{_first_round_hint(session)}",
-        _players_keyboard("hdvote", chat_id, alive, include_skip=True),
-    )
-
-
-async def _handeel_resolve_round(context, session):
-    data = session["data"]["votes"]
-    chat_id = session["chat_id"]
-    votes = [v for v in data.values() if v != "skip"]
-
-    accused = None
-    if votes:
-        counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        top_candidates = [k for k, c in counts.items() if c == top]
-        if len(top_candidates) == 1:
-            accused = top_candidates[0]
-
-    if accused is None:
-        await _announce(context, chat_id, "⚖️ ما فيه اتفاق كافي، محدش طلع.")
-    else:
-        role = _role_of(session, accused)
-        name = session["players"][accused]["name"]
-        if role == "هنديل":
-            await _announce(context, chat_id, f"🎉 *انتهت اللعبة!*\n\n{name} كان هنديل، والمجموعة كسبت! 🏆")
-            _finish_session(chat_id)
+async def _unknown_resolve_vote(application, chat_id, force=False):
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    result_text = None
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "playing" or session.get("phase") != "vote":
             return
-        session["players"][accused]["alive"] = False
-        await _announce(context, chat_id, f"👉 {name} طلع، وما كان هنديل. اللعبة مستمرة.")
-
-    alive = _alive_players(session)
-    if len(alive) <= 2:
-        hnaidel = next((p for p in alive if _role_of(session, p["id"]) == "هنديل"), None)
-        if hnaidel:
-            await _announce(context, chat_id, f"🎉 *انتهت اللعبة!*\n\nهنديل ({hnaidel['name']}) نجح واختفى بين آخر لاعبين! 🕵️")
-            _finish_session(chat_id)
+        votes = session.get("votes", {})
+        player_ids = list(session["players"].keys())
+        if len(votes) < len(player_ids) and not force:
             return
-
-    if session["round"] >= HANDEEL_MAX_ROUNDS:
-        hnaidel = next((p for p in _session_players(session) if _role_of(session, p["id"]) == "هنديل"), None)
-        name = hnaidel["name"] if hnaidel else "؟"
-        await _announce(context, chat_id, f"🎉 *انتهت اللعبة!*\n\nخلصت الجولات وهنديل ({name}) نجح ما انكشفش! 🕵️")
-        _finish_session(chat_id)
-        return
-
-    session["round"] += 1
-    _touch(session)
-    await _handeel_start_round(context, session)
-
-
-# ================================================================
-# 🎭 الأقنعة
-# ================================================================
-
-async def _masks_start_round(context, session):
-    session["data"]["votes"] = {}
-    _touch(session)
-    chat_id = session["chat_id"]
-    alive = _alive_players(session)
-
-    await _announce(
-        context, chat_id,
-        f"🎭 *الأقنعة — الجولة {session['round']}/{MASKS_MAX_ROUNDS}*\n\n"
-        "كل لاعب عنده هوية سرية. راقبوا بعض وصوّتوا على من تشكوا إنه مختلف:"
-        f"{_first_round_hint(session)}",
-        _players_keyboard("mkvote", chat_id, alive, include_skip=True),
-    )
-
-
-async def _masks_resolve_round(context, session):
-    data = session["data"]["votes"]
-    chat_id = session["chat_id"]
-    votes = [v for v in data.values() if v != "skip"]
-
-    if votes:
         counts = defaultdict(int)
-        for v in votes:
-            counts[v] += 1
-        top = max(counts.values())
-        top_candidates = [k for k, c in counts.items() if c == top]
-        if len(top_candidates) == 1:
-            out_id = top_candidates[0]
-            name = session["players"][out_id]["name"]
-            role = _role_of(session, out_id)
-            session["players"][out_id]["alive"] = False
-            await _announce(context, chat_id, f"👉 {name} طلع من اللعبة، كان يلبس {role}.")
-        else:
-            await _announce(context, chat_id, "⚖️ التصويت تعادل، محدش طلع.")
-    else:
-        await _announce(context, chat_id, "⚖️ محدش صوّت.")
-
-    alive = _alive_players(session)
-    if len(alive) <= 1 or session["round"] >= MASKS_MAX_ROUNDS:
-        counts = defaultdict(int)
-        for p in alive:
-            counts[_role_of(session, p["id"])] += 1
+        for target in votes.values():
+            if target and target != "skip":
+                counts[str(target)] += 1
+        culprit_ids = {str(uid) for uid in session["case"]["culprit_ids"]}
         if counts:
-            top = max(counts.values())
-            winners = [r for r, c in counts.items() if c == top]
-            if len(winners) == 1:
-                await _announce(context, chat_id, f"🎉 *انتهت اللعبة!*\n\nأصحاب {winners[0]} هم الفايزين! 🏆")
-            else:
-                await _announce(context, chat_id, "🤝 *انتهت اللعبة بالتعادل!*")
+            max_votes = max(counts.values())
+            top_targets = [uid for uid, count in counts.items() if count == max_votes]
         else:
-            await _announce(context, chat_id, "🤝 *انتهت اللعبة بدون فايز واضح.*")
-        _finish_session(chat_id)
-        return
+            top_targets = []
+        caught = len(top_targets) == 1 and top_targets[0] in culprit_ids
+        culprit_names = "، ".join(
+            session["players"].get(uid, {}).get("name", "المتلاعب")
+            for uid in culprit_ids
+        )
+        vote_lines = []
+        for uid, count in sorted(counts.items(), key=lambda item: item[1], reverse=True):
+            name = session["players"].get(uid, {}).get("name", "لاعب")
+            vote_lines.append(f"• {name}: {count} صوت")
+        vote_summary = "\n".join(vote_lines) if vote_lines else "مافي أصوات مسجلة."
 
-    session["round"] += 1
-    _touch(session)
-    await _masks_start_round(context, session)
+        if caught:
+            winner = "investigators"
+            result_text = (
+                "🏆 فريق التحقيق فاز!\n"
+                f"تم كشف أحد المتلاعبين: {session['players'].get(top_targets[0], {}).get('name', 'المتهم')}.\n\n"
+                "ياسمين أكدت أن الأدلة قادت للمسؤول الحقيقي."
+            )
+        else:
+            winner = "saboteur"
+            result_text = (
+                "🕶️ المتلاعب فاز هذه المرة!\n"
+                f"فريق المتلاعبين الحقيقي: {culprit_names}.\n\n"
+                "نجح في تضليل التحقيق أو الهروب من التصويت."
+            )
+        session["status"] = "finished"
+        session["phase"] = "finished"
+        session["winner"] = winner
+        session["finished_at"] = time.time()
+        session["vote_summary"] = vote_summary
+        _unknown_save(session)
 
-
-# ================================================================
-# 🎮 لعبة حجر ورق مقص (فردية)
-# ================================================================
-
-async def _handle_rps(update, context, choice):
-    q = update.callback_query
-
-    if choice not in SOLO_RPS_CHOICES:
-        await q.answer()
-        return
-
-    bot_choice = random.choice(list(SOLO_RPS_CHOICES.keys()))
-
-    if choice == bot_choice:
-        result = "🤝 تعادل!"
-    elif SOLO_RPS_BEATS[choice] == bot_choice:
-        result = "🎉 كسبت!"
-    else:
-        result = "😅 خسرت!"
-
-    text = (
-        f"{SOLO_RPS_CHOICES[choice]} ضد {SOLO_RPS_CHOICES[bot_choice]}\n\n"
-        f"{result}\n\nتحب تلعب تاني؟"
+    await _unknown_send_media(
+        application.bot, chat_id,
+        "win_investigators" if winner == "investigators" else "win_saboteur",
+        caption=(
+            f"{UNKNOWN_GAME_TITLE}\n\n{result_text}\n\n"
+            f"📊 نتيجة التصويت:\n{vote_summary}\n\n"
+            "انتهت القضية. اكتبوا (لعبة) لفتح تحقيق جديد."
+        ),
     )
-    await q.answer(result)
+
+
+async def _unknown_timer(application, chat_id, phase, round_no, deadline):
+    await asyncio.sleep(max(0, float(deadline) - time.time()))
+    if phase == "actions":
+        await _unknown_resolve_round(application, chat_id, round_no, force=True)
+    elif phase == "vote":
+        await _unknown_resolve_vote(application, chat_id, force=True)
+
+
+def _unknown_schedule_timer(application, chat_id, phase, round_no, deadline):
+    application.create_task(
+        _unknown_timer(application, chat_id, phase, round_no, deadline)
+    )
+
+
+async def restore_unknown_game_timers(application):
+    """Restore round/vote deadlines after a bot restart."""
     try:
-        await q.edit_message_text(text, reply_markup=rps_keyboard())
-    except Exception:
-        await q.message.reply_text(text, reply_markup=rps_keyboard())
+        for session in _unknown_all_sessions():
+            if session.get("status") != "playing":
+                continue
+            phase = session.get("phase")
+            if phase not in ("actions", "vote"):
+                continue
+            _unknown_schedule_timer(
+                application,
+                int(session["chat_id"]),
+                phase,
+                int(session.get("round", 0)),
+                float(session.get("deadline", time.time())),
+            )
+    except Exception as exc:
+        print(f"[UNKNOWN TIMER RESTORE ERROR] {type(exc).__name__}: {exc}")
 
 
-# ----------------------------------------------------------------
-# استقبال الأفعال أثناء اللعب
-# ----------------------------------------------------------------
-
-async def handle_game_action(update, context, action):
+async def handle_unknown_action(update, context, chat_id, action):
     q = update.callback_query
-    user_id = update.effective_user.id
-    subaction, chat_id, extra = _parse_act(action)
-
-    if subaction == "rps":
-        await _handle_rps(update, context, extra[0] if extra else "")
-        return
-
-    target_raw = extra[0] if extra else None
-
-    with GAME_LOCK:
-        session = GAME_SESSIONS.get(game_key(chat_id))
-        if not session or session.get("status") != "playing":
-            await q.answer("اللعبة ما شغالة أو خلصت.", show_alert=True)
+    uid = str(update.effective_user.id)
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    should_resolve = False
+    round_no = None
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "playing" or session.get("phase") != "actions":
+            await q.answer("المرحلة دي انتهت أو اللعبة ما شغالة.", show_alert=True)
             return
-
-        if user_id not in session["players"]:
-            await q.answer("إنت ما من لاعبين اللعبة.", show_alert=True)
+        if uid not in session["players"]:
+            await q.answer("إنت ما مشارك في التحقيق.", show_alert=True)
             return
-
-        if not session["players"][user_id]["alive"]:
-            await q.answer("إنت طلعت من اللعبة، ما تقدر تلعب.", show_alert=True)
+        if time.time() > float(session.get("deadline", 0)):
+            await q.answer("انتهى زمن الاختيار.", show_alert=True)
             return
-
-        _touch(session)
-        game_type = session["type"]
-        resolve_fn = None
-
-        # ---------------- مافيا ----------------
-        if game_type == "mafia":
-            if session["data"].get("phase") != ("night" if subaction in ("mtarget", "mprotect", "minspect") else "day") and subaction != "mforce":
-                await q.answer("مش وقت الفعل ده الآن.", show_alert=True)
-                return
-
-            if subaction == "mtarget":
-                if _role_of(session, user_id) != "مافيا":
-                    await q.answer("إنت مش مافيا.", show_alert=True)
-                    return
-                target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-                session["data"]["night"]["mafia_votes"][user_id] = target
-                await q.answer("🎯 سجلت هدفك.")
-            elif subaction == "mprotect":
-                if _role_of(session, user_id) != "دكتور":
-                    await q.answer("إنت مش دكتور.", show_alert=True)
-                    return
-                target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-                session["data"]["night"]["protect"] = target
-                await q.answer("🩺 سجلت حمايتك.")
-            elif subaction == "minspect":
-                if _role_of(session, user_id) != "محقق":
-                    await q.answer("إنت مش محقق.", show_alert=True)
-                    return
-                target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-                session["data"]["night"]["inspect"] = target
-                await q.answer("🔎 سجلت تحقيقك.")
-            elif subaction == "mvote":
-                if session["data"].get("phase") != "day":
-                    await q.answer("مش وقت التصويت الآن.", show_alert=True)
-                    return
-                target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-                session["data"]["day_votes"][user_id] = target
-                await q.answer("🗳️ سجلت تصويتك.")
-            elif subaction == "mforce":
-                if user_id != session["host_id"]:
-                    await q.answer("بس صاحب اللعبة يقدر يفرض الانتقال.", show_alert=True)
-                    return
-                await q.answer("⏭️ تم فرض الانتقال.")
-                if session["data"].get("phase") == "night":
-                    resolve_fn = _mafia_resolve_night
-                else:
-                    resolve_fn = _mafia_resolve_day
-            else:
-                await q.answer()
-                return
-
-            if resolve_fn is None and session["data"].get("phase") == "night" and _mafia_night_ready(session):
-                resolve_fn = _mafia_resolve_night
-            elif resolve_fn is None and session["data"].get("phase") == "day":
-                alive_ids = {p["id"] for p in _alive_players(session)}
-                if alive_ids <= set(session["data"]["day_votes"].keys()):
-                    resolve_fn = _mafia_resolve_day
-
-        # ---------------- سفينة الفضاء ----------------
-        elif game_type == "spaceship":
-            if subaction in ("s_repair", "s_sabotage", "s_scan"):
-                if session["data"].get("phase") != "action":
-                    await q.answer("مش وقت الفعل ده الآن.", show_alert=True)
-                    return
-                if subaction == "s_sabotage" and _role_of(session, user_id) != "مخرب":
-                    await q.answer("بس المخرب يقدر يخرب.", show_alert=True)
-                    return
-                session["data"]["actions"][user_id] = subaction
-                await q.answer("✅ سجلت فعلك.")
-                alive_ids = {p["id"] for p in _alive_players(session)}
-                if alive_ids <= set(session["data"]["actions"].keys()):
-                    resolve_fn = _space_resolve_action
-            elif subaction == "svote":
-                if session["data"].get("phase") != "vote":
-                    await q.answer("مش وقت التصويت الآن.", show_alert=True)
-                    return
-                target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-                session["data"]["votes"][user_id] = target
-                await q.answer("🗳️ سجلت تصويتك.")
-                alive_ids = {p["id"] for p in _alive_players(session)}
-                if alive_ids <= set(session["data"]["votes"].keys()):
-                    resolve_fn = _space_resolve_vote
-            else:
-                await q.answer()
-                return
-
-        # ---------------- سرقة البنك ----------------
-        elif game_type == "bank":
-            if subaction not in ("bk_plan", "bk_hack", "bk_enter", "bk_escape"):
-                await q.answer()
-                return
-            session["data"]["actions"][user_id] = subaction
-            await q.answer("✅ سجلت فعلك.")
-            alive_ids = {p["id"] for p in _alive_players(session)}
-            escape_votes = sum(1 for a in session["data"]["actions"].values() if a == "bk_escape")
-            if alive_ids <= set(session["data"]["actions"].keys()) or escape_votes > len(alive_ids) / 2:
-                resolve_fn = _bank_resolve_round
-
-        # ---------------- الجزيرة ----------------
-        elif game_type == "island":
-            if subaction not in ("is_food", "is_water", "is_shelter", "is_rest"):
-                await q.answer()
-                return
-            session["data"]["actions"][user_id] = subaction
-            await q.answer("✅ سجلت مهمتك.")
-            alive_ids = {p["id"] for p in _alive_players(session)}
-            if alive_ids <= set(session["data"]["actions"].keys()):
-                resolve_fn = _island_resolve_day
-
-        # ---------------- المدينة المفقودة ----------------
-        elif game_type == "lost_city":
-            if subaction not in ("cy_left", "cy_center", "cy_right"):
-                await q.answer()
-                return
-            session["data"]["votes"][user_id] = subaction
-            await q.answer("🗳️ سجلت اختيارك.")
-            alive_ids = {p["id"] for p in _alive_players(session)}
-            if alive_ids <= set(session["data"]["votes"].keys()):
-                resolve_fn = _city_resolve_stage
-
-        # ---------------- هنديل ----------------
-        elif game_type == "handeel":
-            if subaction != "hdvote":
-                await q.answer()
-                return
-            target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-            session["data"]["votes"][user_id] = target
-            await q.answer("🗳️ سجلت تصويتك.")
-            alive_ids = {p["id"] for p in _alive_players(session)}
-            if alive_ids <= set(session["data"]["votes"].keys()):
-                resolve_fn = _handeel_resolve_round
-
-        # ---------------- الأقنعة ----------------
-        elif game_type == "masks":
-            if subaction != "mkvote":
-                await q.answer()
-                return
-            target = int(target_raw) if target_raw and target_raw != "skip" else "skip"
-            session["data"]["votes"][user_id] = target
-            await q.answer("🗳️ سجلت تصويتك.")
-            alive_ids = {p["id"] for p in _alive_players(session)}
-            if alive_ids <= set(session["data"]["votes"].keys()):
-                resolve_fn = _masks_resolve_round
-
-        else:
-            await q.answer()
+        if uid in session.get("actions", {}):
+            await q.answer("سجلنا تحركك بالفعل في المرحلة دي.", show_alert=True)
             return
+        role = session["roles"].get(uid, "محقق")
+        allowed = {"erase", "plant", "blend"} if role == "المتلاعب" else {"room", "camera", "witness"}
+        if action not in allowed:
+            await q.answer("الخيار ده ما متاح لدورك.", show_alert=True)
+            return
+        session["actions"][uid] = action
+        round_no = int(session["round"])
+        should_resolve = len(session["actions"]) >= len(session["players"])
+        _unknown_save(session)
+    await q.answer("تم تسجيل تحركك بسرية. 🔐")
+    if should_resolve:
+        await _unknown_resolve_round(context.application, chat_id, round_no)
 
-    if resolve_fn is not None:
-        await resolve_fn(context, session)
 
+async def handle_unknown_vote(update, context, chat_id, target_id):
+    q = update.callback_query
+    uid = str(update.effective_user.id)
+    target_id = str(target_id)
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    should_resolve = False
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "playing" or session.get("phase") != "vote":
+            await q.answer("التصويت غير متاح حالياً.", show_alert=True)
+            return
+        if uid not in session["players"]:
+            await q.answer("إنت ما مشارك في التحقيق.", show_alert=True)
+            return
+        if target_id not in session["players"]:
+            await q.answer("المشتبه فيه غير موجود.", show_alert=True)
+            return
+        if time.time() > float(session.get("deadline", 0)):
+            await q.answer("انتهى زمن التصويت.", show_alert=True)
+            return
+        if uid in session.get("votes", {}):
+            await q.answer("صوتك اتسجل بالفعل.", show_alert=True)
+            return
+        session["votes"][uid] = target_id
+        should_resolve = len(session["votes"]) >= len(session["players"])
+        _unknown_save(session)
+    await q.answer("تم تسجيل تصويتك بسرية. 🗳️")
+    if should_resolve:
+        await _unknown_resolve_vote(context.application, chat_id)
 
-# ----------------------------------------------------------------
-# موجّه أزرار الألعاب
-# ----------------------------------------------------------------
 
 async def game_callback_router(update, context):
     q = update.callback_query
     data = q.data or ""
 
-    if data == "games:solo":
-        await q.answer()
-        await q.edit_message_text("🎮 الألعاب الفردية:", reply_markup=solo_games_keyboard())
+    if data == "game:unknown":
+        await start_game_lobby(update, context, "unknown")
         return
 
-    if data == "games:group":
-        await q.answer()
-        await q.edit_message_text("👥 الألعاب الجماعية:", reply_markup=group_games_keyboard())
+    if data == "games:join":
+        await join_current_game(update, context)
         return
 
-    if data == "games:help":
+    if data == "games:learn":
+        await q.answer()
+        await _unknown_send_media(context.bot, q.message.chat_id, "tutorial", caption="📖 دليل سريع قبل دخول التحقيق")
+        await q.edit_message_text(
+            "📖 كيف تلعب YASMINE: THE UNKNOWN؟\n\n"
+            "1️⃣ افتح تحقيقاً جماعياً في القروب، وبعدها انضم من الزر.\n"
+            "2️⃣ افتح الخاص مع ياسمين من زر (تفعيل الخاص)؛ بدون الخطوة دي ما حتستلم دورك السري.\n"
+            "3️⃣ أي لاعب يقدر يطلب البداية؛ ما في قائد أو صلاحيات خاصة لصاحب إنشاء اللعبة.\n"
+            "4️⃣ ياسمين توزع الأدوار حسب عدد المشاركين، ومافي حد أقصى ثابت.\n"
+            "5️⃣ عندك 3 مراحل سريعة. في كل مرحلة تختار تحركاً واحداً من الخاص.\n"
+            "6️⃣ القرائن بتظهر في القروب، وبعدها كل لاعب يصوّت سراً على المشتبه فيه.\n"
+            "7️⃣ لو انكشف المتلاعب، فريق التحقيق يفوز؛ ولو ضلّل الجميع، هو يفوز.\n\n"
+            "ياسمين هي مديرة اللعبة من البداية للنهاية. 🕯️",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎯 جرّب تدريباً", callback_data="games:practice")],
+                [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
+            ]),
+        )
+        return
+
+    if data == "games:practice":
+        await q.answer()
+        await _unknown_send_media(context.bot, q.message.chat_id, "tutorial", caption="🎯 غرفة التدريب — جرّب دور المحقق")
+        await q.edit_message_text(
+            "🎯 تدريب سريع — أنت محقق\n\n"
+            "انقطعت الكهرباء في الفندق، ووجدت ياسمين بطاقة دخول قرب غرفة الأدلة. "
+            "في التدريب، اختار الإجراء الأنسب لجمع معلومة إضافية قبل اتهام أي شخص.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📹 أراجع الكاميرات", callback_data="tut:camera")],
+                [InlineKeyboardButton("🗣️ أستجوب الشاهد", callback_data="tut:witness")],
+                [InlineKeyboardButton("⚖️ أتهم فوراً", callback_data="tut:accuse")],
+            ]),
+        )
+        return
+
+    if data == "tut:camera":
         await q.answer()
         await q.edit_message_text(
-            "ℹ️ *كيف تلعب في ياسمين؟*\n\n"
-            "1️⃣ اختار لعبة من القائمة، حتشوف شرحها وخطواتها كاملة قبل ما تدخل.\n"
-            "2️⃣ اضغط «🙋 انضم للعبة» عشان تدخل، وأي لاعب تاني في القروب يقدر ينضم بنفس الطريقة.\n"
-            "3️⃣ لما العدد يكتمل، صاحب اللعبة (اللي بدأها) يضغط «▶️ ابدأ اللعبة».\n"
-            "4️⃣ لو اللعبة فيها دور سري، حستلمه في الخاص — لازم تكون بديت محادثة معايا قبل كده عشان أقدر أبعتلك.\n"
-            "5️⃣ كل جولة بتوضح لك بالضبط شنو تختار، والتوجيه بيتكرر مختصر في أول جولة.\n"
-            "6️⃣ صاحب اللعبة يقدر يلغيها في أي وقت بزرار «❌ إلغاء».",
-            reply_markup=games_menu_keyboard(),
+            "✅ اختيار جيد! مراجعة الكاميرات تعطيك قرينة، لكنها ممكن تكون ناقصة أو مضللة. "
+            "اجمع أكثر من قرينة قبل التصويت النهائي.\n\n"
+            "في اللعبة الحقيقية، اختيارك بيتسجل في الخاص والنتيجة بتظهر للقروب."
+        )
+        return
+
+    if data == "tut:witness":
+        await q.answer()
+        await q.edit_message_text(
+            "✅ ممتاز! استجواب الشاهد ممكن يكشف تناقضاً في أقوال المشتبه فيهم. "
+            "قارن كلام الشاهد مع آثار الغرف وتسجيلات الكاميرات."
+        )
+        return
+
+    if data == "tut:accuse":
+        await q.answer()
+        await q.edit_message_text(
+            "⚠️ التسرع خطر! ما في طرد لاعب في كل مرحلة. اجمعوا القرائن خلال 3 مراحل، "
+            "وبعدها ياسمين تفتح تصويتاً سرياً واحداً للحسم."
         )
         return
 
     if data == "games:back":
         await q.answer()
-        await q.edit_message_text("🎮 اختار نوع الألعاب:", reply_markup=games_menu_keyboard())
+        await show_games_menu(update, context)
         return
 
-    if data == "game:rps":
-        await q.answer()
-        await q.edit_message_text(
-            "✊ *حجر ورق مقص*\n\n"
-            "اختار حركتك وأنا حختار حركتي عشوائياً، وحنعرف مين كسب فوراً.",
-            parse_mode="Markdown",
-            reply_markup=rps_keyboard(),
-        )
-        return
-
-    if data.startswith("game:") and data[5:] in GAME_RULES:
-        await start_game_lobby(update, context, data[5:])
-        return
-
-    if data == "game:join":
-        await join_current_game(update, context)
-        return
-
-    if data == "game:start":
-        await _begin_game(update, context)
-        return
-
-    if data == "game:cancel":
-        await cancel_current_game(update, context)
-        return
-
-    if data.startswith("act:"):
-        await handle_game_action(update, context, data[4:])
-        return
-
-
-# ----------------------------------------------------------------
-# تنظيف جلسات الألعاب القديمة
-# ----------------------------------------------------------------
-
-def cleanup_finished_games():
-    now = time.time()
-    with GAME_LOCK:
-        dead = []
-        for key, session in GAME_SESSIONS.items():
-            if now - session.get("last_activity", now) > SESSION_TTL_SECONDS:
-                dead.append(key)
-        for key in dead:
-            GAME_SESSIONS.pop(key, None)
-    if dead:
-        print(f"[GAMES] نظفت {len(dead)} جلسة قديمة.")
-
-
-def games_cleanup_loop():
-    while True:
-        time.sleep(600)
+    parts = data.split(":")
+    if len(parts) >= 3 and parts[0] == "unk":
+        action = parts[1]
         try:
-            cleanup_finished_games()
-        except Exception as e:
-            print(f"[GAMES CLEANUP ERROR]: {e}")
+            chat_id = int(parts[2])
+        except ValueError:
+            await q.answer("تعذر تحديد جلسة التحقيق.", show_alert=True)
+            return
+        if action == "join":
+            await join_current_game(update, context)
+        elif action == "begin":
+            await begin_unknown_game(update, context, chat_id)
+        elif action == "leave":
+            await leave_unknown_game(update, context, chat_id)
+        elif action == "act" and len(parts) == 4:
+            await handle_unknown_action(update, context, chat_id, parts[3])
+        elif action == "vote" and len(parts) == 4:
+            await handle_unknown_vote(update, context, chat_id, parts[3])
+        else:
+            await q.answer("الطلب غير معروف.", show_alert=True)
+        return
+
+    await q.answer("الزر ده انتهى أو غير معروف.", show_alert=True)
 
 
-threading.Thread(target=games_cleanup_loop, daemon=True).start()
+# End of YASMINE: THE UNKNOWN engine
 
 
 # ============================================================
@@ -2100,6 +1635,7 @@ def init_database():
 
 
 init_database()
+init_unknown_game_database()
 
 
 def update_user_profile(user_id, full_name, username):
@@ -5720,6 +5256,7 @@ if __name__ == "__main__":
         .connect_timeout(30)
         .pool_timeout(30)
         .concurrent_updates(32)
+        .post_init(restore_unknown_game_timers)
         .build()
     )
 
@@ -5733,6 +5270,9 @@ if __name__ == "__main__":
             ChatMemberHandler.MY_CHAT_MEMBER
         )
     )
+
+    app.add_handler(CommandHandler("start", unknown_start_command))
+    app.add_handler(CommandHandler("games", games_command))
 
     app.add_handler(
         CommandHandler(
@@ -5777,7 +5317,7 @@ if __name__ == "__main__":
     app.add_handler(
         CallbackQueryHandler(
             game_callback_router,
-            pattern=r"^(games:|game:|act:)"
+            pattern=r"^(games:|game:|unk:|tut:)"
         )
     )
 
