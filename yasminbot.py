@@ -942,7 +942,7 @@ def _unknown_assign_roles(players):
     return roles
 
 
-def _unknown_action_keyboard(chat_id, role):
+def _unknown_action_keyboard(chat_id, role, round_no):
     if role == "المتلاعب":
         choices = [
             ("erase", UNKNOWN_ACTIONS["erase"]),
@@ -956,7 +956,7 @@ def _unknown_action_keyboard(chat_id, role):
             ("witness", UNKNOWN_ACTIONS["witness"]),
         ]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(label, callback_data=f"unk:act:{chat_id}:{key}")]
+        [InlineKeyboardButton(label, callback_data=f"unk:act:{chat_id}:{round_no}:{key}")]
         for key, label in choices
     ])
 
@@ -1179,12 +1179,19 @@ async def _unknown_send_round(application, session):
         f"📡 بث التحقيق — المرحلة {round_no}/{UNKNOWN_ROUNDS}\n"
         "👀 المتفرجون يقدروا يتابعوا كل الأحداث العامة. الأدوار والقرارات الحساسة سرية.\n\n"
     )
+    case = session.get("case", {})
+    case_intro = (
+        f"📁 ملف القضية: اختفاء {case.get('missing_item', 'ملف مهم')} من {case.get('location', 'موقع التحقيق')}، "
+        f"وذلك قرابة {case.get('incident_time', 'وقت غير محدد')}.\n"
+    )
     await _unknown_send_media(
         application.bot, chat_id, f"round_{round_no}",
-        caption=public_header + UNKNOWN_SCENES[round_no],
+        caption=public_header + case_intro + "\n" + UNKNOWN_SCENES[round_no],
     )
     for uid, player in session["players"].items():
         role = session["roles"].get(uid, "محقق")
+        used = set(session.get("used_actions", {}).get(uid, []))
+        available = ( {"erase", "plant", "blend"} if role == "المتلاعب" else {"room", "camera", "witness"} ) - used
         prompt = (
             f"🕯️ {UNKNOWN_GAME_TITLE}\n"
             f"المرحلة {round_no} من {UNKNOWN_ROUNDS}\n\n"
@@ -1196,7 +1203,11 @@ async def _unknown_send_round(application, session):
             await application.bot.send_message(
                 chat_id=int(uid),
                 text=prompt,
-                reply_markup=_unknown_action_keyboard(chat_id, role),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(UNKNOWN_ACTIONS[key], callback_data=f"unk:act:{chat_id}:{round_no}:{key}")]
+                    for key in ( ["erase", "plant", "blend"] if role == "المتلاعب" else ["room", "camera", "witness"] )
+                    if key in available
+                ]) if available else None,
             )
         except Exception as exc:
             print(f"[UNKNOWN DM ERROR] uid={uid}: {type(exc).__name__}: {exc}")
@@ -1230,11 +1241,18 @@ async def begin_unknown_game(update, context, chat_id):
 
         session["roles"] = _unknown_assign_roles(players)
         culprit_ids = [uid for uid, role in session["roles"].items() if role == "المتلاعب"]
-        session["case"] = {"culprit_ids": culprit_ids}
+        # Each new match gets a fresh randomly selected saboteur and a different case setup.
+        session["case"] = {
+            "culprit_ids": culprit_ids,
+            "location": random.choice(["فندق النخيل", "فندق الساحة", "فندق الميناء", "فندق القمر"]),
+            "missing_item": random.choice(["ملف التحقيق الأزرق", "ذاكرة الكاميرا", "سجل الدخول", "المفتاح الاحتياطي"]),
+            "incident_time": random.choice(["8:15 مساءً", "9:40 مساءً", "11:05 مساءً", "6:30 مساءً"]),
+        }
         session["status"] = "playing"
         session["phase"] = "actions"
         session["round"] = 1
         session["actions"] = {}
+        session["used_actions"] = {uid: [] for uid in session["players"]}
         session["clues"] = []
         session["votes"] = {}
         session["alliances"] = []
@@ -1319,12 +1337,36 @@ def _unknown_make_clue(session, action, role):
         alternatives = [uid for uid in all_ids if uid not in culprit_ids]
         target_id = random.choice(alternatives) if alternatives else random.choice(list(culprit_ids))
     name = _unknown_public_name(players[target_id])
-    template = random.choice(UNKNOWN_CLUE_TEMPLATES[action])
+    case = session.get("case", {})
+    location = case.get("location", "موقع التحقيق")
+    item = case.get("missing_item", "ملف القضية")
+    incident_time = case.get("incident_time", "وقت الحادث")
+
+    # Every action produces a concrete scene detail, not a vague generic hint.
+    if action == "camera":
+        detail = random.choice([
+            f"الكاميرا الشرقية أظهرت {name} قرب باب {location} عند {incident_time}، وبعدها انقطع التسجيل لمدة 12 ثانية.",
+            f"ظهر {name} في انعكاس زجاج المصعد حاملاً شيئاً يشبه {item}، لكن زاوية التصوير لم تحسم هويته تماماً.",
+            f"سجل الدخول الإلكتروني رصد بطاقة مرتبطة باسم {name} عند الممر المؤدي إلى غرفة الأدلة.",
+        ])
+    elif action == "room":
+        detail = random.choice([
+            f"أثناء تفتيش {location} وُجدت قصاصة من غلاف {item} تحت الطاولة القريبة من مكان {name}.",
+            f"في درج جانبي عُثر على أثر لمس حديث وبجواره إيصال يحمل توقيت {incident_time} واسم {name}.",
+            f"خلف الباب الداخلي وُجد مفتاح احتياطي، وعلى بطاقة استلامه توقيع باسم {name}.",
+        ])
+    else:
+        detail = random.choice([
+            f"الشاهد قال إن {name} سأله عن مكان {item} قبل الحادث بقليل.",
+            f"الشاهد أكد أنه رأى {name} قرب {location} عند {incident_time}، لكنه غير متأكد مما كان يحمله.",
+            f"في إفادته، ذكر الشاهد أن {name} غيّر كلامه بشأن آخر مرة شاهد فيها {item}.",
+        ])
     return {
-        "text": template.format(name=name),
+        "text": detail,
         "target_id": target_id,
         "real": bool(is_true),
         "source": action,
+        "scene": {"location": location, "item": item, "time": incident_time},
     }
 
 
@@ -1595,7 +1637,7 @@ async def restore_unknown_game_timers(application):
         print(f"[UNKNOWN TIMER RESTORE ERROR] {type(exc).__name__}: {exc}")
 
 
-async def handle_unknown_action(update, context, chat_id, action):
+async def handle_unknown_action(update, context, chat_id, round_token, action):
     q = update.callback_query
     uid = str(update.effective_user.id)
     lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
@@ -1609,6 +1651,9 @@ async def handle_unknown_action(update, context, chat_id, action):
         if uid not in session["players"]:
             await q.answer("إنت ما مشارك في التحقيق.", show_alert=True)
             return
+        if int(round_token) != int(session.get("round", 0)):
+            await q.answer("الزر ده تابع لمرحلة قديمة وانتهت.", show_alert=True)
+            return
         if time.time() > float(session.get("deadline", 0)):
             await q.answer("انتهى زمن الاختيار.", show_alert=True)
             return
@@ -1620,8 +1665,13 @@ async def handle_unknown_action(update, context, chat_id, action):
         if action not in allowed:
             await q.answer("الخيار ده ما متاح لدورك.", show_alert=True)
             return
-        session["actions"][uid] = action
         round_no = int(session["round"])
+        used_actions = session.setdefault("used_actions", {}).setdefault(uid, [])
+        if action in used_actions:
+            await q.answer("استخدمت التحرك ده في مرحلة سابقة؛ اختار تحركاً مختلفاً.", show_alert=True)
+            return
+        session["actions"][uid] = action
+        used_actions.append(action)
         should_resolve = len(session["actions"]) >= len(session["players"])
         public_name = _unknown_public_name(session["players"][uid])
         public_action = (
@@ -1772,8 +1822,8 @@ async def game_callback_router(update, context):
             await begin_unknown_game(update, context, chat_id)
         elif action == "leave":
             await leave_unknown_game(update, context, chat_id)
-        elif action == "act" and len(parts) == 4:
-            await handle_unknown_action(update, context, chat_id, parts[3])
+        elif action == "act" and len(parts) == 5:
+            await handle_unknown_action(update, context, chat_id, parts[3], parts[4])
         elif action == "vote" and len(parts) == 4:
             await handle_unknown_vote(update, context, chat_id, parts[3])
         elif action in ("challenge", "ally") and len(parts) == 4:
