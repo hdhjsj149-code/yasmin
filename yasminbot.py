@@ -3378,19 +3378,73 @@ def ask_openrouter(system_prompt, conversation_history):
 
 
 # ============================================================
-# 22. تحويل النص إلى صوت
+# 22. تحويل النص إلى صوت — YASMINE VOICE
 # ============================================================
+
+# يمكن تغيير الإعدادات من Environment Variables دون تعديل الكود:
+# YASMINE_TTS_VOICE=ar-EG-SalmaNeural
+# YASMINE_TTS_RATE=-6%
+# YASMINE_TTS_PITCH=+0Hz
+# أبقينا الصوت الحالي افتراضياً حتى تتم مقارنة العينات عملياً.
+YASMINE_TTS_VOICE = os.environ.get(
+    "YASMINE_TTS_VOICE", "ar-SA-ZariyahNeural"
+).strip()
+YASMINE_TTS_RATE = os.environ.get("YASMINE_TTS_RATE", "-6%").strip()
+YASMINE_TTS_PITCH = os.environ.get("YASMINE_TTS_PITCH", "+0Hz").strip()
+
+
+def clean_text_for_speech(text_data):
+    """Remove visual formatting and emoji while keeping readable Arabic text."""
+    text = str(text_data or "")
+
+    # Keep the visible label in Markdown links, but never read the URL.
+    text = re.sub(r"\[([^\]]+)\]\((?:https?://|www\.)[^)]+\)", r"\1", text)
+    text = re.sub(r"https?://\S+|www\.\S+", "", text)
+
+    # Remove HTML tags and common Markdown formatting markers.
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"```[\s\S]*?```", " ", text)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\*{1,3}|_{1,3}|~{2}|\|", " ", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = re.sub(r"(?m)^\s*[-•▪◦]+\s*", "", text)
+
+    # Remove emoji/pictographs, variation selectors and zero-width joiners.
+    emoji_pattern = (
+        "[\U0001F1E6-\U0001FAFF]"
+        "|[\U00002600-\U000027BF]"
+        "|[\u2B50\u2B55]"
+        "|[\uFE0E\uFE0F\u200D\u20E3]"
+    )
+    text = re.sub(emoji_pattern, " ", text)
+
+    # Remove control characters and decorative symbol runs, retaining Arabic,
+    # Latin letters, numbers and useful punctuation.
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", text)
+    text = re.sub(r"[★☆✦✧◆◇■□●○▶►✓✔✕✖]+", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"([،,؛;.!؟?])\1+", r"\1", text)
+
+    return text.strip(" \n\t-•")
+
 
 async def text_to_live_voice(text_data):
     if not HAS_EDGE_TTS:
         return None
 
     try:
-        voice = "ar-SA-ZariyahNeural"
+        speech_text = clean_text_for_speech(text_data)
+        if not speech_text:
+            print("[EDGE TTS] النص فارغ بعد التنظيف؛ تم تخطي الصوت.")
+            return None
 
         communicate = edge_tts.Communicate(
-            text_data,
-            voice
+            speech_text,
+            YASMINE_TTS_VOICE,
+            rate=YASMINE_TTS_RATE,
+            pitch=YASMINE_TTS_PITCH,
         )
 
         voice_io = io.BytesIO()
@@ -3399,8 +3453,10 @@ async def text_to_live_voice(text_data):
             if chunk["type"] == "audio":
                 voice_io.write(chunk["data"])
 
-        voice_io.seek(0)
+        if voice_io.tell() == 0:
+            return None
 
+        voice_io.seek(0)
         return voice_io
 
     except Exception as e:
@@ -3408,7 +3464,6 @@ async def text_to_live_voice(text_data):
             f"[EDGE TTS ERROR]: "
             f"{type(e).__name__}: {e}"
         )
-
         return None
 
 
