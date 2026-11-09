@@ -364,15 +364,32 @@ group_msg_counters = defaultdict(int)
 # YASMINE GAME ENGINE — YASMINE: THE UNKNOWN
 # Yasmine is the only game master. Every human participant is an equal player.
 # Sessions are persisted in SQLite; one active investigation per group.
+# Competitive rules: private clues, public accusations, hidden saboteur
+# (identity is never leaked), one clear point system, bounded player count.
 # ============================================================
 
 GAME_TRIGGER_WORDS = ["ألعاب ياسمين", "العاب ياسمين", "/games", "لعبة", "العب", "نلعب"]
 
 UNKNOWN_GAME_TITLE = "🕯️ YASMINE: THE UNKNOWN"
 UNKNOWN_GAME_TTL = 6 * 60 * 60
-UNKNOWN_ACTION_SECONDS = 55
-UNKNOWN_VOTE_SECONDS = 45
+UNKNOWN_ACTION_SECONDS = 60
+UNKNOWN_VOTE_SECONDS = 75
 UNKNOWN_ROUNDS = 3
+UNKNOWN_MIN_PLAYERS = 3          # غيّرها لـ 4 لو داير لعبة أحسن
+UNKNOWN_MAX_PLAYERS = 30         # حد تيليجرام للأزرار والرسائل
+UNKNOWN_CHALLENGES_PER_PLAYER = 2
+UNKNOWN_REQUEST_TTL = 90         # ثواني قبل ما تنتهي دعوة التحدي/التحالف
+
+# نظام النقاط (كله في مكان واحد عشان القواعد تبقى واضحة)
+UNKNOWN_PTS_ACT = 1              # كل تحرك مسجل
+UNKNOWN_PTS_CORRECT_VOTE = 5     # تصويت صح على المتلاعب
+UNKNOWN_PTS_TEAM_WIN = 2         # فوز فريق التحقيق
+UNKNOWN_PTS_SABOTEUR_WIN = 8     # المتلاعب نجا
+UNKNOWN_PTS_CORRECT_ACCUSE = 3   # اتهام علني صح
+UNKNOWN_PTS_FRAME = 1            # اتهام بريء = نقطة للمتلاعب
+UNKNOWN_PTS_FRAME_CAP = 4
+UNKNOWN_PTS_CHALLENGE_WIN = 3
+UNKNOWN_PTS_ALLIANCE = 2
 
 # Independent visual library for YASMINE: THE UNKNOWN.
 # Files are optional at runtime: missing media falls back to text messages.
@@ -431,115 +448,131 @@ def _unknown_media_report():
 
 
 async def _unknown_send_media(bot, chat_id, media_key, caption=None, reply_markup=None):
-    """Send a scene image, falling back visibly to text if the asset is absent/broken."""
+    """Send a scene image. Captions longer than Telegram's photo limit go out as a
+    separate text message (with the buttons); missing/broken images fall back to text."""
+    if caption and len(caption) > 4000:
+        caption = caption[:3990] + "…"
     path = _unknown_media_path(media_key)
+    long_caption = bool(caption) and len(caption) > 1000
     if not path:
         if caption:
             return await bot.send_message(chat_id=chat_id, text=caption, reply_markup=reply_markup)
         return None
     try:
         with open(path, "rb") as photo:
-            return await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=caption,
-                reply_markup=reply_markup,
-            )
+            if not long_caption:
+                return await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                )
+            await bot.send_photo(chat_id=chat_id, photo=photo)
+        return await bot.send_message(chat_id=chat_id, text=caption, reply_markup=reply_markup)
     except Exception as exc:
         print(f"[UNKNOWN MEDIA ERROR] key={media_key} path={path}: {type(exc).__name__}: {exc}")
         if caption:
             return await bot.send_message(chat_id=chat_id, text=caption, reply_markup=reply_markup)
         return None
 
+
 UNKNOWN_SCENES = {
     1: (
         "🌑 المرحلة الأولى: انقطاع الكهرباء\n"
-        "في فندق النخيل، انقطعت الكهرباء لمدة 47 ثانية. "
-        "بعد عودة النور، اكتشف النزلاء أن غرفة الأدلة فُتحت واختفى منها ملف مهم.\n\n"
-        "ابدأوا بجمع القرائن. كل لاعب عنده تحرك سري واحد."
+        "في {location} انقطعت الكهرباء 47 ثانية قرابة {time}. "
+        "لما رجع النور اكتشفوا إن {item} اختفى!\n\n"
+        "فيكم متلاعب مخفي. اختاروا تحرككم السري من الخاص."
     ),
     2: (
         "📹 المرحلة الثانية: التسجيل المفقود\n"
-        "ياسمين عثرت على تسجيل كاميرا متقطع، وفي نفس الوقت ظهر أثر جديد قرب المصعد. "
-        "في زول بحاول يوجّه التحقيق بعيد عن الحقيقة.\n\n"
-        "اختاروا تحرككم التالي من الخاص."
+        "ياسمين لقت تسجيل كاميرا متقطع قرب المصعد في {location}. "
+        "في زول بيحاول يوجّه الشك لشخص بريء!\n\n"
+        "قارنوا قرائنكم... لكن اللي بيتكلم ممكن يكون بيكضب. 😈"
     ),
     3: (
         "🚪 المرحلة الثالثة: الغرفة 17\n"
-        "وصل التحقيق إلى الغرفة 17. الشاهد الوحيد مستعد يتكلم، لكن الوقت قرب ينتهي. "
-        "دي آخر فرصة لجمع القرائن قبل الاتهام النهائي.\n\n"
-        "بعد المرحلة دي، كل لاعب حيختار المشتبه فيه في تصويت سري."
+        "التحقيق وصل الغرفة 17 والوقت قرب ينتهي. "
+        "دي آخر فرصة تعرفوا مين أخذ {item} قبل التصويت السري.\n\n"
+        "بعد المرحلة دي ما في تحركات تانية: نقاش وتصويت!"
     ),
 }
 
+_UNK_INV_BASE = (
+    "🔎 أنت من فريق التحقيق.\n"
+    "🎯 هدفك: تكشف المتلاعب وتصوّت عليه في الآخر.\n"
+    "🧰 كل مرحلة بتختار تحرك وبتستلم قرينة سرية هنا في الخاص. القرينة ممكن تكون صحيحة أو مضللة.\n"
+    "🗣️ شاركوا قرائنكم في القروب... لكن المتلاعب بيكذب، فما تثق في أي زول بسهولة!\n"
+    "💰 تصويت صح +5 • اتهام علني صح +3 • فوز الفريق +2"
+)
+
 UNKNOWN_ROLE_INFO = {
     "المتلاعب": (
-        "أنت الشخص الذي عبث بالأدلة. هدفك أن تجعل التحقيق يفشل. "
-        "في كل مرحلة اختر بين طمس قرينة، أو زرع قرينة مضللة، أو التظاهر بالمساعدة. "
-        "لا تكشف هويتك لأي لاعب."
+        "🕶️ أنت المتلاعب!\n"
+        "🎯 هدفك: ما تتكشف، وتخلّي الناس يصوّتوا ضد بريء.\n"
+        "🧰 تحركاتك: 🧹 تطمس القرينة الرسمية • 🧩 تبدلها بقرينة مزيفة • "
+        "🎭 تاخد قرينة مزيفة خاصة وتتظاهر بيها.\n"
+        "😈 كذّب في القروب، اتهم الأبرياء، وحوّل الشك لغيرك.\n"
+        "💰 لو ما اتكشفت +8 • كل اتهام ضد بريء +1"
     ),
-    "المحقق": (
-        "أنت ضمن فريق كشف الحقيقة. اجمع القرائن واربط المعلومات ببعضها. "
-        "هدف الفريق هو تحديد المتلاعب في التصويت النهائي."
-    ),
-    "خبير الأدلة": (
-        "أنت متخصص في تحليل الآثار. عند اختيار تفتيش الغرف تكون قرينتك أدق من المعتاد. "
-        "شارك استنتاجاتك مع المجموعة دون كشف أي معلومة خاصة."
-    ),
-    "مسؤول الأمن": (
-        "أنت مسؤول الأمن. عند مراجعة الكاميرات تكون فرصتك في استخراج قرينة صحيحة أعلى. "
-        "راقب التناقضات ولا تتسرع في الاتهام."
-    ),
-    "الشاهد": (
-        "أنت شاهد على جزء من الأحداث. عند استجواب الشاهد تكون فرصتك في الوصول إلى قرينة صحيحة أعلى. "
-        "ساعد المجموعة على الوصول للحقيقة."
-    ),
-    "مساعد التحقيق": (
-        "أنت مساعد في التحقيق. اجمع المعلومات من الغرف والكاميرات والشهود، "
-        "وساعد المجموعة في اتخاذ القرار النهائي."
-    ),
+    "المحقق": _UNK_INV_BASE,
+    "خبير الأدلة": _UNK_INV_BASE + "\n⭐ ميزتك: قرينة (تفتيش الغرف) عندك أدق من غيرك.",
+    "مسؤول الأمن": _UNK_INV_BASE + "\n⭐ ميزتك: قرينة (مراجعة الكاميرات) عندك أدق من غيرك.",
+    "الشاهد": _UNK_INV_BASE + "\n⭐ ميزتك: قرينة (استجواب الشاهد) عندك أدق من غيرك.",
+    "مساعد التحقيق": _UNK_INV_BASE,
 }
 
 UNKNOWN_INVESTIGATION_ROLES = [
     "المحقق", "خبير الأدلة", "مسؤول الأمن", "الشاهد", "مساعد التحقيق"
 ]
 
+UNKNOWN_INVESTIGATE_ACTIONS = ("room", "camera", "witness")
+
 UNKNOWN_ACTIONS = {
     "room": "🔎 تفتيش الغرف",
     "camera": "📹 مراجعة الكاميرات",
     "witness": "🗣️ استجواب الشاهد",
-    "erase": "🧹 طمس قرينة",
+    "erase": "🧹 طمس القرينة",
     "plant": "🧩 زرع قرينة مضللة",
     "blend": "🎭 التظاهر بالمساعدة",
     "wait": "لم يختر تحركاً",
 }
 
-UNKNOWN_CLUE_TEMPLATES = {
-    "room": [
-        "أثر زجاج قرب باب الخدمة يربط {name} بمكان الحادث.",
-        "بصمة جزئية وُجدت على ملف الأدلة وتشير إلى {name}.",
-        "بطاقة غرفة ممزقة وُجدت في الممر الذي مرّ منه {name}.",
-    ],
-    "camera": [
-        "التسجيل المتقطع أظهر شخصاً يحمل بطاقة باسم {name} قرب المصعد.",
-        "ظلّ ظهر أمام كاميرا الطابق قبل الحادث بثوانٍ، وتمت مطابقته مع {name}.",
-        "الكاميرا سجلت باب الغرفة 17 يُفتح بعد مرور {name}.",
-    ],
-    "witness": [
-        "الشاهد سمع {name} يسأل عن غرفة الأدلة قبل انقطاع الكهرباء.",
-        "الشاهد وصف صوتاً يشبه صوت {name} قرب المصعد.",
-        "آخر شخص ناقش الملف المفقود مع الشاهد كان {name}.",
-    ],
+UNKNOWN_ACTION_HELP = {
+    "room": "قرينة سرية ليك انت بس",
+    "camera": "قرينة سرية ليك انت بس",
+    "witness": "قرينة سرية ليك انت بس",
+    "erase": "القرينة الرسمية ما بتظهر في المرحلة دي",
+    "plant": "القرينة الرسمية بتتبدل بقرينة مزيفة",
+    "blend": "تاخد قرينة مزيفة خاصة تقولها للناس كأنها حقيقية",
 }
+
+UNKNOWN_QUIPS = [
+    "👀 الشك بدأ يلعب في القروب... مين بيكضب عليكم؟",
+    "🔥 ياسمين شايفة كل حاجة. في زول وشو بيقول إنه بريء!",
+    "😏 اللي بيتكلم كتير مش دايماً بريء، واللي ساكت مش دايماً مجرم.",
+    "🕯️ الليل طويل والمتلاعب لسه بينكم... انتبهوا!",
+    "🤨 قارنوا القرائن: لو اتنين قالوا حاجتين مختلفتين، واحد فيهم بيكضب.",
+    "😂 في زول حياتو في خطر من الاتهامات الجاية!",
+]
 
 # Social competition: public challenges/alliances, private roles, public spectator feed.
 UNKNOWN_CHALLENGE_SECONDS = 35
 UNKNOWN_CHALLENGE_QUESTIONS = [
-    {"q": "في التحقيق، أي قرينة أقوى لوحدها؟", "a": "A", "options": ["A) تسجيل واضح متصل", "B) إشاعة من مجهول"], "why": "التسجيل الواضح المتصل أقوى من الإشاعة."},
-    {"q": "لو شاهد غيّر أقواله، أول خطوة شنو؟", "a": "B", "options": ["A) اتهامه فوراً", "B) مقارنة أقواله بالأدلة"], "why": "مقارنة الأقوال بالأدلة تكشف التناقض بدون تسرع."},
-    {"q": "أي تصرف يحافظ على نزاهة التحقيق؟", "a": "A", "options": ["A) توثيق الدليل ومصدره", "B) نشر اتهام بلا دليل"], "why": "توثيق الدليل ومصدره هو الأساس."},
-    {"q": "الكاميرا توقفت 40 ثانية. الاستنتاج الصحيح؟", "a": "B", "options": ["A) المتهم هو آخر شخص ظهر", "B) نحتاج قرائن إضافية"], "why": "انقطاع التسجيل وحده لا يثبت هوية أي شخص."},
-    {"q": "لقيت دليلاً يناقض فرضيتك. تعمل شنو؟", "a": "A", "options": ["A) تراجع فرضيتك", "B) تتجاهل الدليل"], "why": "المحقق الجيد يراجع فرضيته عند ظهور دليل جديد."},
+    {"q": "7 × 8 = ؟", "ok": "56", "bad": "54", "why": "7 × 8 = 56."},
+    {"q": "9 × 6 = ؟", "ok": "54", "bad": "56", "why": "9 × 6 = 54."},
+    {"q": "12 + 15 = ؟", "ok": "27", "bad": "26", "why": "12 + 15 = 27."},
+    {"q": "أكبر كوكب في المجموعة الشمسية؟", "ok": "المشتري", "bad": "زحل", "why": "المشتري هو الأكبر."},
+    {"q": "كم رجل للعنكبوت؟", "ok": "8", "bad": "6", "why": "للعنكبوت 8 أرجل."},
+    {"q": "أسرع حيوان بري؟", "ok": "الفهد", "bad": "الأسد", "why": "الفهد أسرع حيوان بري."},
+    {"q": "كم دقيقة في ساعتين؟", "ok": "120", "bad": "100", "why": "2 × 60 = 120 دقيقة."},
+    {"q": "عاصمة مصر؟", "ok": "القاهرة", "bad": "الإسكندرية", "why": "القاهرة هي العاصمة."},
+    {"q": "البحر اللي على ساحل السودان الشرقي؟", "ok": "الأحمر", "bad": "الأسود", "why": "البحر الأحمر."},
+    {"q": "أكبر محيط في العالم؟", "ok": "الهادئ", "bad": "الأطلسي", "why": "المحيط الهادئ هو الأكبر."},
+    {"q": "كم لون في قوس قزح؟", "ok": "7", "bad": "6", "why": "قوس قزح فيه 7 ألوان."},
+    {"q": "الأرض بتدور حول؟", "ok": "الشمس", "bad": "القمر", "why": "الأرض بتدور حول الشمس."},
+    {"q": "كم ساعة في اليوم؟", "ok": "24", "bad": "12", "why": "اليوم 24 ساعة."},
+    {"q": "أول حرف في كلمة (ياسمين)؟", "ok": "ي", "bad": "س", "why": "الحرف الأول هو الياء."},
+    {"q": "أي واحد بيموء؟", "ok": "القط", "bad": "الكلب", "why": "القط هو اللي بيموء."},
 ]
 
 UNKNOWN_GAME_DB_LOCK = threading.RLock()
@@ -643,7 +676,7 @@ def _unknown_public_name(player):
     return str(player.get("name") or "لاعب")[:40]
 
 
-def _unknown_scoreboard(session):
+def _unknown_scoreboard(session, limit=10):
     ranked = sorted(
         session.get("players", {}).items(),
         key=lambda item: int(item[1].get("score", 0)),
@@ -651,14 +684,17 @@ def _unknown_scoreboard(session):
     )
     if not ranked:
         return "مافي نقاط مسجلة لسه."
-    return "\n".join(
-        f"{index}. {_unknown_public_name(player)} — {int(player.get('score', 0))} نقطة"
-        for index, (uid, player) in enumerate(ranked[:10], 1)
-    )
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for index, (uid, player) in enumerate(ranked[:limit], 1):
+        mark = medals[index - 1] if index <= 3 else f"{index}."
+        lines.append(f"{mark} {_unknown_public_name(player)} — {int(player.get('score', 0))} نقطة")
+    return "\n".join(lines)
 
 
 def _unknown_players(session):
     return list(session.get("players", {}).values())
+
 
 
 def _unknown_lobby_text(session):
@@ -666,11 +702,15 @@ def _unknown_lobby_text(session):
     lines = [
         UNKNOWN_GAME_TITLE,
         "",
-        "🏨 القضية: اختفاء ملف الأدلة من فندق النخيل.",
-        "ياسمين هي مديرة التحقيق. ما في قائد من اللاعبين؛ كل المشاركين متساوين.",
+        "🏨 قضية جديدة: ياسمين بتختار تفاصيلها لحظة البداية.",
+        "🕶️ فيكم متلاعب مخفي، والباقي محققين. اللي يكشفه ياخد أعلى نقاط... واللي يخدع الكل يفوز! 😈",
         "",
-        f"👥 المشاركون حالياً: {len(players)}",
-        "🔐 الخاص: لازم كل لاعب يفتح محادثة ياسمين من زر (تفعيل الخاص) عشان يستلم دوره السري.",
+        f"👥 اللاعبين: {len(players)}/{UNKNOWN_MAX_PLAYERS} (أقل عدد للبداية: {UNKNOWN_MIN_PLAYERS})",
+        "",
+        "📋 الخطوات:",
+        "1️⃣ اضغط (انضم للتحقيق).",
+        "2️⃣ اضغط (تفعيل الخاص) عشان تستلم دورك السري — ✅ يعني جاهز، 🔒 يعني لسه.",
+        "3️⃣ لما الكل ✅ أي لاعب يضغط (ابدأ).",
         "",
         "قائمة المشاركين:",
     ]
@@ -679,9 +719,8 @@ def _unknown_lobby_text(session):
         lines.append(f"{index}. {_unknown_public_name(player)} {ready}")
     lines += [
         "",
-        "مافي حد أقصى لعدد المشاركين؛ ياسمين بتوزع الأدوار حسب العدد الموجود.",
-        "أي لاعب يقدر يضغط (ابدأ التحقيق) بعد تفعيل الخاص للجميع.",
-        "👀 المتفرجون مرحب بيهم: حيشوفوا أحداث التحقيق العامة، لكن ما بقدروا يختاروا أو يصوّتوا.",
+        "👑 ما في قائد: كل المشاركين متساوين وياسمين هي مديرة اللعبة.",
+        "👀 المتفرجون يشوفوا الأحداث العامة بس، ما بيقدروا يلعبوا أو يصوّتوا.",
     ]
     return "\n".join(lines)
 
@@ -706,12 +745,19 @@ async def _unknown_publish_lobby(context, session, prefer_message=None):
     text = _unknown_lobby_text(session)
     message_id = session.get("lobby_message_id")
     if not session.get("lobby_media_sent"):
-        await _unknown_send_media(
-            context.bot, chat_id, "lobby",
-            caption="🌙 وصلت ياسمين إلى مسرح القضية. التحقيق على وشك أن يبدأ.",
-        )
-        session["lobby_media_sent"] = True
-        _unknown_save(session)
+        fresh = _unknown_load(chat_id)
+        if fresh and fresh.get("status") == "lobby" and not fresh.get("lobby_media_sent"):
+            fresh["lobby_media_sent"] = True
+            _unknown_save(fresh)
+            session["lobby_media_sent"] = True
+            await _unknown_send_media(
+                context.bot, chat_id, "lobby",
+                caption="🌙 وصلت ياسمين إلى مسرح القضية. التحقيق على وشك أن يبدأ.",
+            )
+            latest = _unknown_load(chat_id)
+            if latest and latest.get("status") == "lobby":
+                session = latest
+                text = _unknown_lobby_text(session)
     try:
         if prefer_message is not None:
             await prefer_message.edit_text(text, reply_markup=keyboard)
@@ -889,6 +935,8 @@ async def join_current_game(update, context):
         uid = str(user.id)
         if uid in session["players"]:
             await q.answer("إنت مسجل بالفعل. فعّل الخاص لو لسه ما فعلتو.", show_alert=True)
+        elif len(session["players"]) >= UNKNOWN_MAX_PLAYERS:
+            await q.answer(f"التحقيق اكتمل ({UNKNOWN_MAX_PLAYERS} لاعب كحد أقصى).", show_alert=True)
         else:
             session["players"][uid] = {
                 "id": user.id,
@@ -961,6 +1009,14 @@ def _unknown_action_keyboard(chat_id, role, round_no):
     ])
 
 
+def _unknown_request_alive(request):
+    """A pending invitation expires after UNKNOWN_REQUEST_TTL seconds."""
+    return (
+        request.get("status") == "pending"
+        and time.time() - float(request.get("created_at", 0)) <= UNKNOWN_REQUEST_TTL
+    )
+
+
 async def _unknown_send_social_menu(application, session):
     """Give participants private controls; invitations and outcomes are announced in-group."""
     chat_id = int(session["chat_id"])
@@ -972,17 +1028,19 @@ async def _unknown_send_social_menu(application, session):
             for batch_index, batch in enumerate(batches, 1):
                 rows = []
                 for target_uid, target in batch:
-                    label = _unknown_public_name(target)
+                    label = _unknown_public_name(target)[:20]
                     rows.append([
-                        InlineKeyboardButton(f"⚔️ تحدي {label}"[:60], callback_data=f"unk:challenge:{chat_id}:{target_uid}"),
-                        InlineKeyboardButton(f"🤝 تحالف {label}"[:60], callback_data=f"unk:ally:{chat_id}:{target_uid}"),
+                        InlineKeyboardButton(f"⚔️ {label}", callback_data=f"unk:challenge:{chat_id}:{target_uid}"),
+                        InlineKeyboardButton(f"🤝 {label}", callback_data=f"unk:ally:{chat_id}:{target_uid}"),
                     ])
                 await application.bot.send_message(
                     chat_id=int(uid),
                     text=(
-                        "⚔️ ساحة المنافسة في القروب\n\n"
-                        "اختار لاعباً لتحديه في سؤال سريع، أو اعرض عليه تحالفاً مؤقتاً. "
-                        "كل الدعوات والنتائج حتظهر في القروب، لكن دورك السري ما حيتكشف."
+                        "⚔️ ساحة المنافسة\n\n"
+                        f"⚔️ تحدي: سؤال سريع قدام الكل في القروب، أسرع إجابة صحيحة تاخد +{UNKNOWN_PTS_CHALLENGE_WIN} "
+                        f"(لكل لاعب {UNKNOWN_CHALLENGES_PER_PLAYER} تحديات بس).\n"
+                        f"🤝 تحالف: +{UNKNOWN_PTS_ALLIANCE} للاتنين... لكن لو حليفك طلع هو المتلاعب واتكشف، بتخسر {UNKNOWN_PTS_ALLIANCE} 😂\n\n"
+                        "الدعوات والنتائج بتظهر في القروب، لكن دورك السري ما بيتكشف."
                         + (f"\nقائمة {batch_index} من {len(batches)}" if len(batches) > 1 else "")
                     ),
                     reply_markup=InlineKeyboardMarkup(rows) if rows else None,
@@ -1007,32 +1065,48 @@ async def _unknown_create_social_request(update, context, chat_id, target_id, ki
         if uid == target_id:
             await q.answer("ما ممكن تتحدى نفسك 😄", show_alert=True)
             return
+        requests = session.setdefault("social_requests", {})
         if kind == "ally":
             active = [a for a in session.get("alliances", []) if a.get("status") == "accepted" and uid in (a.get("a"), a.get("b"))]
             if active:
                 await q.answer("عندك تحالف نشط بالفعل.", show_alert=True)
                 return
-            pending = any(a.get("status") == "pending" and a.get("kind") == "ally" and a.get("a") == uid for a in session.get("social_requests", {}).values())
+            pending = any(r.get("kind") == "ally" and r.get("a") == uid and _unknown_request_alive(r) for r in requests.values())
             if pending:
                 await q.answer("عندك دعوة تحالف منتظرة بالفعل.", show_alert=True)
                 return
+        else:
+            counts = session.setdefault("challenge_count", {})
+            if int(counts.get(uid, 0)) >= UNKNOWN_CHALLENGES_PER_PLAYER:
+                await q.answer(f"استخدمت تحدياتك ({UNKNOWN_CHALLENGES_PER_PLAYER}). انتظر دور غيرك 😄", show_alert=True)
+                return
+            busy = any(
+                r.get("kind") == "challenge" and r.get("a") == uid
+                and (r.get("status") == "active" or _unknown_request_alive(r))
+                for r in requests.values()
+            )
+            if busy:
+                await q.answer("عندك تحدي شغال أو منتظر رد.", show_alert=True)
+                return
+            counts[uid] = int(counts.get(uid, 0)) + 1
         request_id = str(int(time.time() * 1000000) % 1000000000000)
-        while request_id in session.setdefault("social_requests", {}):
+        while request_id in requests:
             request_id = str(int(request_id) + 1)
-        session["social_requests"][request_id] = {
+        requests[request_id] = {
             "kind": kind, "a": uid, "b": target_id, "status": "pending", "created_at": time.time()
         }
         _unknown_save(session)
         from_name = _unknown_public_name(session["players"][uid])
         to_name = _unknown_public_name(session["players"][target_id])
-    label = "تحدي" if kind == "challenge" else "تحالف"
+    label = "تحدي ⚔️" if kind == "challenge" else "تحالف 🤝"
     markup = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ أوافق", callback_data=f"unk:socialyes:{chat_id}:{request_id}"),
         InlineKeyboardButton("❌ أرفض", callback_data=f"unk:socialno:{chat_id}:{request_id}"),
     ]])
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"📣 {from_name} وجّه {label} إلى {to_name}!\nالمتفرجون تابعوا، والقرار عند الطرف المدعو.",
+        text=(f"📣 {from_name} وجّه {label} إلى {to_name}!\n"
+              f"⏳ عندك {UNKNOWN_REQUEST_TTL} ثانية للرد يا {to_name}. الجمهور يتابع 👀"),
         reply_markup=markup,
     )
     await q.answer("تم إعلان دعوتك في القروب!")
@@ -1055,28 +1129,21 @@ async def _unknown_finish_challenge(application, chat_id, request_id, timeout=Fa
         if winners:
             winner = min(winners, key=lambda uid: answers[uid].get("at", 0))
             loser = request["b"] if winner == request["a"] else request["a"]
-            session["players"][winner]["score"] = int(session["players"][winner].get("score", 0)) + 3
-            result = f"🏆 {_unknown_public_name(session['players'][winner])} كسب التحدي وحصل على 3 نقاط!"
+            session["players"][winner]["score"] = int(session["players"][winner].get("score", 0)) + UNKNOWN_PTS_CHALLENGE_WIN
+            result = f"🏆 {_unknown_public_name(session['players'][winner])} كسب التحدي وحصل على {UNKNOWN_PTS_CHALLENGE_WIN} نقاط!"
             if loser in session["players"]:
-                result += f"\n{_unknown_public_name(session['players'][loser])} ما قدر يسبق بالإجابة الصحيحة."
+                result += f"\n{_unknown_public_name(session['players'][loser])} ما قدر يسبق بالإجابة الصحيحة 😏"
             if request.get("why"):
-                result += f"\n💡 التوضيح: {request['why']}"
+                result += f"\n💡 {request['why']}"
         elif len(answers) == 2:
-            for player_id in (request["a"], request["b"]):
-                session["players"][player_id]["score"] = int(session["players"][player_id].get("score", 0)) + 1
-            result = "🤝 التحدي انتهى بالتعادل؛ كل لاعب حصل على نقطة."
+            result = "😂 الاتنين غلطوا! ما في نقاط لأي واحد."
         elif timeout:
-            answered = next(iter(answers), None)
-            if answered:
-                session["players"][answered]["score"] = int(session["players"][answered].get("score", 0)) + 1
-                result = f"⏱️ انتهى الزمن. {_unknown_public_name(session['players'][answered])} حصل على نقطة للمشاركة."
-            else:
-                result = "⏱️ انتهى زمن التحدي بدون إجابات."
+            result = "⏱️ انتهى الزمن بدون إجابة صحيحة. ما في نقاط."
         else:
             return
         request["status"] = "completed"
         _unknown_save(session)
-        scoreboard = _unknown_scoreboard(session)
+        scoreboard = _unknown_scoreboard(session, 5)
     await application.bot.send_message(
         chat_id=chat_id,
         text=f"⚔️ نتيجة التحدي\n{result}\n\n📊 الترتيب الحالي:\n{scoreboard}",
@@ -1101,10 +1168,21 @@ async def _unknown_handle_social_response(update, context, chat_id, request_id, 
         if uid != request.get("b"):
             await q.answer("الدعوة موجهة للاعب تاني.", show_alert=True)
             return
+        if not _unknown_request_alive(request):
+            request["status"] = "expired"
+            if request.get("kind") == "challenge":
+                counts = session.setdefault("challenge_count", {})
+                counts[request["a"]] = max(0, int(counts.get(request["a"], 0)) - 1)
+            _unknown_save(session)
+            await q.answer("الدعوة انتهت (عدّى الوقت).", show_alert=True)
+            return
         if not accepted:
             request["status"] = "declined"
+            if request.get("kind") == "challenge":
+                counts = session.setdefault("challenge_count", {})
+                counts[request["a"]] = max(0, int(counts.get(request["a"], 0)) - 1)
             _unknown_save(session)
-            text = f"🚫 {_unknown_public_name(session['players'][uid])} رفض الدعوة الموجهة من {_unknown_public_name(session['players'][request['a']])}."
+            text = f"🚫 {_unknown_public_name(session['players'][uid])} رفض الدعوة الموجهة من {_unknown_public_name(session['players'][request['a']])} 😏"
             kind = request.get("kind")
         elif request.get("kind") == "ally":
             already = any(a.get("status") == "accepted" and uid in (a.get("a"), a.get("b")) for a in session.get("alliances", []))
@@ -1115,12 +1193,32 @@ async def _unknown_handle_social_response(update, context, chat_id, request_id, 
             request["status"] = "accepted"
             session.setdefault("alliances", []).append({"a": request["a"], "b": request["b"], "status": "accepted"})
             _unknown_save(session)
-            text = f"🤝 تم التحالف بين {_unknown_public_name(session['players'][request['a']])} و{_unknown_public_name(session['players'][uid])}!\nلو الاتنين وصلوا لنهاية القضية، كل واحد يحصل على نقطتين إضافيتين."
+            text = (
+                f"🤝 تم التحالف بين {_unknown_public_name(session['players'][request['a']])} و{_unknown_public_name(session['players'][uid])}!\n"
+                f"في الآخر: +{UNKNOWN_PTS_ALLIANCE} لكل واحد... لكن لو واحد منهم طلع المتلاعب واتكشف، حليفه بيخسر {UNKNOWN_PTS_ALLIANCE} 😈"
+            )
             kind = "ally"
         else:
-            request["status"] = "active"
-            question = random.choice(UNKNOWN_CHALLENGE_QUESTIONS)
-            request.update({"question": question["q"], "options": question["options"], "correct": question["a"], "why": question["why"], "answers": {}, "deadline": time.time() + UNKNOWN_CHALLENGE_SECONDS})
+            used = session.setdefault("used_questions", [])
+            total_q = len(UNKNOWN_CHALLENGE_QUESTIONS)
+            pool = [i for i in range(total_q) if i not in used] or list(range(total_q))
+            idx = random.choice(pool)
+            used.append(idx)
+            item = UNKNOWN_CHALLENGE_QUESTIONS[idx]
+            choices = [(item["ok"], True), (item["bad"], False)]
+            random.shuffle(choices)
+            letters = ["A", "B"]
+            options = [f"{letters[i]}) {choices[i][0]}" for i in range(2)]
+            correct = letters[[c[1] for c in choices].index(True)]
+            request.update({
+                "status": "active",
+                "question": item["q"],
+                "options": options,
+                "correct": correct,
+                "why": item["why"],
+                "answers": {},
+                "deadline": time.time() + UNKNOWN_CHALLENGE_SECONDS,
+            })
             _unknown_save(session)
             text = None
             kind = "challenge"
@@ -1135,7 +1233,8 @@ async def _unknown_handle_social_response(update, context, chat_id, request_id, 
             chat_id=chat_id,
             text=(f"⚔️ بدأ التحدي بين {_unknown_public_name(session['players'][request['a']])} و"
                   f"{_unknown_public_name(session['players'][request['b']])}!\n\n"
-                  f"❓ {question['question']}\n\nأول إجابة صحيحة تكسب 3 نقاط. الجمهور يتابع بدون تدخل."),
+                  f"❓ {question['question']}\n\n"
+                  f"أسرع إجابة صحيحة تكسب {UNKNOWN_PTS_CHALLENGE_WIN} نقاط! ⏱️ {UNKNOWN_CHALLENGE_SECONDS} ثانية."),
             reply_markup=markup,
         )
         context.application.create_task(_unknown_challenge_timer(context.application, chat_id, request_id, request["deadline"]))
@@ -1172,43 +1271,44 @@ async def _unknown_handle_challenge_answer(update, context, chat_id, request_id,
         await _unknown_finish_challenge(context.application, chat_id, request_id)
 
 
+def _unknown_scene_text(session, round_no):
+    case = session.get("case", {})
+    return UNKNOWN_SCENES[round_no].format(
+        location=case.get("location", "موقع التحقيق"),
+        item=case.get("missing_item", "الملف المفقود"),
+        time=case.get("incident_time", "وقت الحادث"),
+    )
+
+
 async def _unknown_send_round(application, session):
     chat_id = int(session["chat_id"])
     round_no = int(session["round"])
     public_header = (
         f"📡 بث التحقيق — المرحلة {round_no}/{UNKNOWN_ROUNDS}\n"
-        "👀 المتفرجون يقدروا يتابعوا كل الأحداث العامة. الأدوار والقرارات الحساسة سرية.\n\n"
-    )
-    case = session.get("case", {})
-    case_intro = (
-        f"📁 ملف القضية: اختفاء {case.get('missing_item', 'ملف مهم')} من {case.get('location', 'موقع التحقيق')}، "
-        f"وذلك قرابة {case.get('incident_time', 'وقت غير محدد')}.\n"
+        f"⏱️ عندكم {UNKNOWN_ACTION_SECONDS} ثانية، اختاروا تحرككم السري من الخاص.\n\n"
     )
     await _unknown_send_media(
         application.bot, chat_id, f"round_{round_no}",
-        caption=public_header + case_intro + "\n" + UNKNOWN_SCENES[round_no],
+        caption=public_header + _unknown_scene_text(session, round_no),
     )
     for uid, player in session["players"].items():
         role = session["roles"].get(uid, "محقق")
         used = set(session.get("used_actions", {}).get(uid, []))
-        available = ( {"erase", "plant", "blend"} if role == "المتلاعب" else {"room", "camera", "witness"} ) - used
+        keys = ["erase", "plant", "blend"] if role == "المتلاعب" else ["room", "camera", "witness"]
+        available = [key for key in keys if key not in used]
+        help_lines = "\n".join(f"{UNKNOWN_ACTIONS[key]} — {UNKNOWN_ACTION_HELP[key]}" for key in available)
         prompt = (
             f"🕯️ {UNKNOWN_GAME_TITLE}\n"
-            f"المرحلة {round_no} من {UNKNOWN_ROUNDS}\n\n"
-            f"دورك السري: {role}\n"
-            f"مهمتك الآن: {UNKNOWN_ROLE_INFO.get(role, UNKNOWN_ROLE_INFO['مساعد التحقيق'])}\n\n"
-            "اختار تحركاً واحداً. ياسمين حتنشر ملخص تحركك في القروب بدون كشف دورك أو معلوماتك السرية."
+            f"المرحلة {round_no} من {UNKNOWN_ROUNDS} • 🎭 دورك: {role}\n\n"
+            f"اختار تحرك واحد ({UNKNOWN_ACTION_SECONDS} ثانية):\n{help_lines}\n\n"
+            "⚠️ كل تحرك بتستخدمه مرة واحدة بس في اللعبة."
         )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(UNKNOWN_ACTIONS[key], callback_data=f"unk:act:{chat_id}:{round_no}:{key}")]
+            for key in available
+        ]) if available else None
         try:
-            await application.bot.send_message(
-                chat_id=int(uid),
-                text=prompt,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton(UNKNOWN_ACTIONS[key], callback_data=f"unk:act:{chat_id}:{round_no}:{key}")]
-                    for key in ( ["erase", "plant", "blend"] if role == "المتلاعب" else ["room", "camera", "witness"] )
-                    if key in available
-                ]) if available else None,
-            )
+            await application.bot.send_message(chat_id=int(uid), text=prompt, reply_markup=markup)
         except Exception as exc:
             print(f"[UNKNOWN DM ERROR] uid={uid}: {type(exc).__name__}: {exc}")
     _unknown_schedule_timer(application, chat_id, "actions", round_no, session["deadline"])
@@ -1227,10 +1327,10 @@ async def begin_unknown_game(update, context, chat_id):
             await q.answer("لازم تنضم للتحقيق أولاً.", show_alert=True)
             return
         players = _unknown_players(session)
-        if len(players) < 2:
-            await q.answer("محتاجين لاعبين على الأقل عشان تبدأ القضية.", show_alert=True)
+        if len(players) < UNKNOWN_MIN_PLAYERS:
+            await q.answer(f"محتاجين {UNKNOWN_MIN_PLAYERS} لاعبين على الأقل عشان تبدأ القضية.", show_alert=True)
             return
-        missing = [p["name"] for p in players if not p.get("private_ready")]
+        missing = [_unknown_public_name(p) for p in players if not p.get("private_ready")]
         if missing:
             await q.answer("باقي تفعيل الخاص لبعض المشاركين.", show_alert=True)
             await context.bot.send_message(
@@ -1257,6 +1357,10 @@ async def begin_unknown_game(update, context, chat_id):
         session["votes"] = {}
         session["alliances"] = []
         session["social_requests"] = {}
+        session["accusations"] = []
+        session["accuse_round"] = None
+        session["challenge_count"] = {}
+        session["used_questions"] = []
         session["deadline"] = time.time() + UNKNOWN_ACTION_SECONDS
         _unknown_save(session)
 
@@ -1265,11 +1369,14 @@ async def begin_unknown_game(update, context, chat_id):
         chat_id=chat_id,
         text=(
             f"🕯️ {UNKNOWN_GAME_TITLE}\n\n"
-            f"بدأ التحقيق بمشاركة {len(players)} لاعبين.\n"
-            "ياسمين هي مديرة اللعبة، والأدوار السرية وصلت للمشاركين في الخاص.\n"
-            "التحركات ونتائج التحقيق والتحديات والتحالفات حتظهر هنا في القروب؛ المتفرجون يشاهدون فقط.\n"
-            "كل لاعب يقدر ينافس لاعباً آخر أو يقترح تحالفاً من القائمة السرية في الخاص.\n"
-            "بعد 3 مراحل، حتبدأ المواجهة والتصويت النهائي."
+            f"بدأ التحقيق بمشاركة {len(players)} لاعبين!\n"
+            f"🕶️ عدد المتلاعبين المخفيين: {len(culprit_ids)} — الأدوار وصلت في الخاص.\n\n"
+            f"📜 {UNKNOWN_ROUNDS} مراحل: في كل مرحلة بتختار تحرك من الخاص، وياسمين بتنشر القرينة الرسمية هنا "
+            "وترسل لكل لاعب قرينة سرية.\n"
+            "🗣️ اتناقشوا، كذّبوا، واتهموا بعض علناً بزر 🔥 (مرة في كل مرحلة).\n"
+            "🗳️ بعد المرحلة الأخيرة: تصويت سري. تعادل الأصوات = المتلاعب يفوز.\n"
+            "⚔️ كمان في الخاص: تحدي لاعب (+3) أو تحالف (+2).\n\n"
+            "🏆 أعلى نقاط في الآخر = بطل التحقيق!"
         ),
     )
 
@@ -1277,24 +1384,25 @@ async def begin_unknown_game(update, context, chat_id):
     for uid, role in session["roles"].items():
         info = UNKNOWN_ROLE_INFO.get(role, UNKNOWN_ROLE_INFO["مساعد التحقيق"])
         allies = [
-            session["players"][other_uid]["name"]
+            _unknown_public_name(session["players"][other_uid])
             for other_uid, other_role in session["roles"].items()
             if other_role == "المتلاعب" and other_uid != uid
         ]
-        ally_text = ("\n\nزملاؤك في فريق المتلاعبين: " + "، ".join(allies)) if allies else ""
+        ally_text = ("\n\n👥 زملاؤك في فريق المتلاعبين: " + "، ".join(allies)) if (allies and role == "المتلاعب") else ""
         try:
             await context.bot.send_message(
                 chat_id=int(uid),
                 text=(
                     f"🔐 دورك السري في {UNKNOWN_GAME_TITLE}\n\n"
                     f"🎭 {role}\n\n{info}{ally_text}\n\n"
-                    "ممنوع ترسل الدور أو صورة الرسالة لأي لاعب."
+                    "🤫 ممنوع ترسل الدور أو صورة الرسالة لأي لاعب."
                 ),
             )
         except Exception:
             failed.append(uid)
 
     if failed:
+        current = None
         async with lock:
             current = _unknown_load(chat_id)
             if current and current.get("status") == "playing":
@@ -1311,38 +1419,50 @@ async def begin_unknown_game(update, context, chat_id):
             chat_id=chat_id,
             text="⚠️ ما قدرت ياسمين ترسل الأدوار لكل المشاركين. رجعنا اللوبي؛ خلي اللاعبين المتأثرين يفتحوا الخاص من زر التفعيل ثم ابدأوا من جديد.",
         )
-        await _unknown_publish_lobby(context, current)
+        if current:
+            await _unknown_publish_lobby(context, current)
         return
 
-    await _unknown_send_round(context.application, session)
-    await _unknown_send_social_menu(context.application, session)
+    # المهلة تبدأ بعد وصول الأدوار عشان ما تضيع ثواني على اللاعبين
+    async with lock:
+        fresh = _unknown_load(chat_id)
+        if not fresh or fresh.get("status") != "playing":
+            return
+        fresh["deadline"] = time.time() + UNKNOWN_ACTION_SECONDS
+        _unknown_save(fresh)
+    await _unknown_send_round(context.application, fresh)
+    await _unknown_send_social_menu(context.application, fresh)
 
 
-def _unknown_make_clue(session, action, role):
-    players = session["players"]
-    culprit_ids = {str(uid) for uid in session["case"]["culprit_ids"]}
-    all_ids = list(players.keys())
-    if action not in UNKNOWN_CLUE_TEMPLATES:
+def _unknown_make_clue(session, action, role, actor_id=None, truth=None, base=0.65):
+    """Build a clue. truth=None -> random (base chance + role bonus); True/False forces it."""
+    if action not in UNKNOWN_INVESTIGATE_ACTIONS:
         return None
-
-    bonus = 0.18 if (
+    players = session["players"]
+    culprit_ids = [str(uid) for uid in session["case"]["culprit_ids"] if str(uid) in players]
+    culprit_set = set(culprit_ids)
+    bonus = 0.2 if (
         (role == "خبير الأدلة" and action == "room")
         or (role == "مسؤول الأمن" and action == "camera")
         or (role == "الشاهد" and action == "witness")
     ) else 0.0
-    is_true = random.random() < min(0.9, 0.66 + bonus)
-    if is_true:
-        target_id = random.choice(list(culprit_ids))
+    if truth is None:
+        truth = random.random() < min(0.9, base + bonus)
+    others = [uid for uid in players if uid != actor_id]
+    true_pool = [uid for uid in culprit_ids if uid != actor_id]
+    if truth and not true_pool:
+        truth = False
+    if truth:
+        target_id = random.choice(true_pool)
     else:
-        alternatives = [uid for uid in all_ids if uid not in culprit_ids]
-        target_id = random.choice(alternatives) if alternatives else random.choice(list(culprit_ids))
+        fake_pool = [uid for uid in others if uid not in culprit_set] or others or list(players)
+        target_id = random.choice(fake_pool)
     name = _unknown_public_name(players[target_id])
     case = session.get("case", {})
     location = case.get("location", "موقع التحقيق")
     item = case.get("missing_item", "ملف القضية")
     incident_time = case.get("incident_time", "وقت الحادث")
 
-    # Every action produces a concrete scene detail, not a vague generic hint.
     if action == "camera":
         detail = random.choice([
             f"الكاميرا الشرقية أظهرت {name} قرب باب {location} عند {incident_time}، وبعدها انقطع التسجيل لمدة 12 ثانية.",
@@ -1364,29 +1484,42 @@ def _unknown_make_clue(session, action, role):
     return {
         "text": detail,
         "target_id": target_id,
-        "real": bool(is_true),
+        "real": bool(truth),
         "source": action,
-        "scene": {"location": location, "item": item, "time": incident_time},
     }
 
 
 def _unknown_vote_keyboard(session):
     chat_id = int(session["chat_id"])
-    rows = []
-    for uid, player in session["players"].items():
-        rows.append([
-            InlineKeyboardButton(
-                f"🗳️ {player['name']}",
-                callback_data=f"unk:vote:{chat_id}:{uid}",
-            )
-        ])
-    return InlineKeyboardMarkup(rows)
+    buttons = [
+        InlineKeyboardButton(
+            f"🗳️ {_unknown_public_name(player)}"[:40],
+            callback_data=f"unk:vote:{chat_id}:{uid}",
+        )
+        for uid, player in session["players"].items()
+    ]
+    return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
+
+
+def _unknown_accuse_keyboard(session, round_no):
+    chat_id = int(session["chat_id"])
+    buttons = [
+        InlineKeyboardButton(
+            f"🔥 {_unknown_public_name(player)}"[:40],
+            callback_data=f"unk:acc:{chat_id}:{round_no}:{uid}",
+        )
+        for uid, player in session["players"].items()
+    ]
+    return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
 
 
 async def _unknown_resolve_round(application, chat_id, expected_round, force=False):
     lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
     next_session = None
-    new_clues = []
+    missed_players = []
+    private_clues = {}
+    official = None
+    erased = False
     async with lock:
         session = _unknown_load(chat_id)
         if (
@@ -1404,99 +1537,109 @@ async def _unknown_resolve_round(application, chat_id, expected_round, force=Fal
         for uid in player_ids:
             actions.setdefault(uid, "wait")
 
-        # Investigation actions create uncertain clues. The hidden saboteur can erase or plant evidence.
+        erase_used = False
+        plant_used = False
+        session.setdefault("clues", [])
         for uid, action in actions.items():
+            if action == "wait":
+                continue
             role = session["roles"].get(uid, "محقق")
-            if action in UNKNOWN_CLUE_TEMPLATES:
-                clue = _unknown_make_clue(session, action, role)
+            session["players"][uid]["score"] = int(session["players"][uid].get("score", 0)) + UNKNOWN_PTS_ACT
+            if role == "المتلاعب":
+                if action == "erase":
+                    erase_used = True
+                elif action == "plant":
+                    plant_used = True
+                elif action == "blend":
+                    fake = _unknown_make_clue(
+                        session, random.choice(UNKNOWN_INVESTIGATE_ACTIONS), role,
+                        actor_id=uid, truth=False,
+                    )
+                    if fake:
+                        private_clues[uid] = ("🎭 قرينتك المزيفة — قولها للناس كأنها حقيقية:", fake)
+            elif action in UNKNOWN_INVESTIGATE_ACTIONS:
+                clue = _unknown_make_clue(session, action, role, actor_id=uid)
                 if clue:
-                    clue["actor_id"] = uid
-                    clue["actor_role"] = role
-                    session["clues"].append(clue)
-                    new_clues.append(clue)
-            elif role == "المتلاعب" and action == "plant":
-                culprit_ids = set(session["case"]["culprit_ids"])
-                innocent_ids = [pid for pid in player_ids if pid not in culprit_ids]
-                target_id = random.choice(innocent_ids) if innocent_ids else player_ids[0]
-                name = _unknown_public_name(session["players"][target_id])
-                clue = {
-                    "text": f"قرينة مزروعة: بطاقة دخول باسم {name} وُجدت قرب غرفة الأدلة.",
-                    "target_id": target_id,
-                    "real": False,
-                    "source": "planted",
-                    "actor_id": uid,
-                    "actor_role": role,
-                }
-                session["clues"].append(clue)
-                new_clues.append(clue)
-            elif role == "المتلاعب" and action == "erase":
-                if session["clues"]:
-                    removed = session["clues"].pop()
-                    if removed in new_clues:
-                        new_clues.remove(removed)
-                    new_clues.append({
-                        "text": "🧹 لاحظت ياسمين أن قرينة من ملف التحقيق تم طمسها.",
-                        "target_id": None,
-                        "real": False,
-                        "source": "erased",
-                        "actor_id": uid,
-                        "actor_role": role,
+                    private_clues[uid] = ("🔎 قرينتك السرية:", clue)
+                    session["clues"].append({
+                        "round": int(expected_round), "actor_id": uid, "source": action,
+                        "text": clue["text"], "target_id": clue["target_id"], "real": clue["real"],
                     })
-                else:
-                    new_clues.append({
-                        "text": "🧹 محاولة طمس دليل، لكن ما كان في قرينة قابلة للإزالة.",
-                        "target_id": None,
-                        "real": False,
-                        "source": "erased",
-                        "actor_id": uid,
-                        "actor_role": role,
-                    })
-            elif role == "المتلاعب" and action == "blend":
-                new_clues.append({
-                    "text": "🎭 أحد المشاركين قدّم مساعدة شكلية دون نتيجة واضحة.",
-                    "target_id": None,
-                    "real": False,
-                    "source": "blend",
-                    "actor_id": uid,
-                    "actor_role": role,
-                })
+
+        # القرينة الرسمية: المتلاعب يقدر يطمسها أو يبدلها بمزيفة (الزرع يغلب الطمس)
+        if plant_used:
+            official = _unknown_make_clue(
+                session, random.choice(UNKNOWN_INVESTIGATE_ACTIONS), "", truth=False
+            )
+        elif erase_used:
+            erased = True
+        else:
+            official = _unknown_make_clue(
+                session, random.choice(UNKNOWN_INVESTIGATE_ACTIONS), "", base=0.6
+            )
+        if official:
+            session["clues"].append({
+                "round": int(expected_round), "actor_id": None, "source": "official",
+                "text": official["text"], "target_id": official["target_id"], "real": official["real"],
+            })
 
         session["actions"] = {}
         if int(session["round"]) < UNKNOWN_ROUNDS:
+            session["accuse_round"] = int(expected_round)
             session["round"] = int(session["round"]) + 1
             session["phase"] = "actions"
             session["deadline"] = time.time() + UNKNOWN_ACTION_SECONDS
-            next_session = session
         else:
+            session["accuse_round"] = None
             session["phase"] = "vote"
             session["votes"] = {}
             session["deadline"] = time.time() + UNKNOWN_VOTE_SECONDS
-            next_session = session
+        next_session = session
         _unknown_save(session)
 
     if missed_players:
-        missed_names = "، ".join(_unknown_public_name(next_session["players"][uid]) for uid in missed_players)
+        missed_names = "، ".join(
+            _unknown_public_name(next_session["players"][uid]) for uid in missed_players
+        )
         await application.bot.send_message(
             chat_id=chat_id,
             text=f"⏱️ انتهى زمن التحرك. اللاعبون الذين لم يختاروا: {missed_names}.",
         )
-    if new_clues:
-        clue_lines = []
-        for i, clue in enumerate(new_clues, 1):
-            actor_id = clue.get("actor_id")
-            actor_role = clue.get("actor_role")
-            if actor_id and actor_role != "المتلاعب" and actor_id in next_session["players"]:
-                actor_label = _unknown_public_name(next_session["players"][actor_id])
-                clue_lines.append(f"{i}. 🔎 {actor_label} جمع القرينة: {clue['text']}")
-            else:
-                clue_lines.append(f"{i}. 🕶️ ظهرت أثناء تحرك سري: {clue['text']}")
-        clue_text = "\n".join(clue_lines)
+
+    if official:
+        official_line = f"📣 القرينة الرسمية من ياسمين:\n{official['text']}"
     else:
-        clue_text = "ما ظهرت قرائن جديدة في المرحلة دي."
+        official_line = "🧹 القرينة الرسمية اتطمست! في زول عبث بالأدلة... مين يا ترى؟ 👀"
+    caption = (
+        f"🧾 نتائج المرحلة {expected_round}\n\n"
+        f"{official_line}\n\n"
+        "⚠️ القرينة الرسمية ممكن تكون مضللة.\n"
+        "📩 كل لاعب استلم قرينة سرية في الخاص — شاركوها أو كذبوا فيها! 😈\n\n"
+        f"📊 الترتيب:\n{_unknown_scoreboard(next_session, 5)}\n\n"
+        f"{random.choice(UNKNOWN_QUIPS)}"
+    )
+    accuse_markup = None
+    if int(expected_round) < UNKNOWN_ROUNDS:
+        caption += "\n\n🔥 عندك شك؟ اتهم لاعب علناً (مرة واحدة في كل مرحلة):"
+        accuse_markup = _unknown_accuse_keyboard(next_session, int(expected_round))
     await _unknown_send_media(
         application.bot, chat_id, "evidence",
-        caption=f"🧾 نتائج المرحلة {expected_round}:\n\n{clue_text}",
+        caption=caption,
+        reply_markup=accuse_markup,
     )
+
+    for uid, (header, clue) in private_clues.items():
+        try:
+            await application.bot.send_message(
+                chat_id=int(uid),
+                text=(
+                    f"{header}\n\n{clue['text']}\n\n"
+                    "🤫 دي معلومة خاصة بيك. ممكن تكون صحيحة أو مضللة. "
+                    "تقدر تشاركها في القروب، تغيّرها، أو تخبيها."
+                ),
+            )
+        except Exception as exc:
+            print(f"[UNKNOWN CLUE DM ERROR] uid={uid}: {type(exc).__name__}: {exc}")
 
     if next_session["phase"] == "actions":
         await _unknown_send_round(application, next_session)
@@ -1505,7 +1648,8 @@ async def _unknown_resolve_round(application, chat_id, expected_round, force=Fal
             application.bot, chat_id, "voting",
             caption=(
                 "⚖️ وصلنا للحظة الحسم!\n\n"
-                "راجعوا القرائن الثلاثة، وبعدها كل لاعب يصوّت سراً من الأزرار أدناه. "
+                f"🗣️ عندكم {UNKNOWN_VOTE_SECONDS} ثانية: ناقشوا واتشاكلوا في القروب 😂 ثم كل لاعب يصوّت سراً.\n"
+                "📌 ممنوع التصويت لنفسك. لو الأصوات اتعادلت، المتلاعب يفوز!\n"
                 "ياسمين حتعلن النتيجة بعد اكتمال التصويت أو انتهاء الوقت."
             ),
             reply_markup=_unknown_vote_keyboard(next_session),
@@ -1523,56 +1667,121 @@ async def _unknown_resolve_vote(application, chat_id, force=False):
         if not session or session.get("status") != "playing" or session.get("phase") != "vote":
             return
         votes = session.get("votes", {})
-        player_ids = list(session["players"].keys())
+        players = session["players"]
+        player_ids = list(players.keys())
         if len(votes) < len(player_ids) and not force:
             return
         counts = defaultdict(int)
         for target in votes.values():
             if target and target != "skip":
                 counts[str(target)] += 1
-        culprit_ids = {str(uid) for uid in session["case"]["culprit_ids"]}
+        culprit_ids = [str(uid) for uid in session["case"]["culprit_ids"] if str(uid) in players]
+        culprit_set = set(culprit_ids)
         if counts:
             max_votes = max(counts.values())
             top_targets = [uid for uid, count in counts.items() if count == max_votes]
         else:
             top_targets = []
-        caught = len(top_targets) == 1 and top_targets[0] in culprit_ids
-        culprit_names = "، ".join(
-            _unknown_public_name(session["players"].get(uid, {}))
-            for uid in culprit_ids
-        )
-        alliance_bonus_lines = []
-        for alliance in session.get("alliances", []):
-            if alliance.get("status") == "accepted" and alliance.get("a") in session["players"] and alliance.get("b") in session["players"]:
-                for ally_id in (alliance["a"], alliance["b"]):
-                    session["players"][ally_id]["score"] = int(session["players"][ally_id].get("score", 0)) + 2
-                alliance_bonus_lines.append(
-                    f"🤝 تحالف {_unknown_public_name(session['players'][alliance['a']])} و{_unknown_public_name(session['players'][alliance['b']])}: +2 لكل لاعب"
-                )
-        vote_lines = []
-        for uid, count in sorted(counts.items(), key=lambda item: item[1], reverse=True):
-            name = session["players"].get(uid, {}).get("name", "لاعب")
-            vote_lines.append(f"• {name}: {count} صوت")
-        vote_summary = "\n".join(vote_lines) if vote_lines else "مافي أصوات مسجلة."
+        caught = len(top_targets) == 1 and top_targets[0] in culprit_set
+        culprit_names = "، ".join(_unknown_public_name(players[uid]) for uid in culprit_ids)
 
+        award = defaultdict(int)
+        point_lines = []
         if caught:
             winner = "investigators"
+            for uid in player_ids:
+                if uid not in culprit_set:
+                    award[uid] += UNKNOWN_PTS_TEAM_WIN
+            correct_voters = [
+                v for v, t in votes.items()
+                if str(t) in culprit_set and v not in culprit_set and v in players
+            ]
+            for v in correct_voters:
+                award[v] += UNKNOWN_PTS_CORRECT_VOTE
+            point_lines.append(f"✅ فريق التحقيق فاز: +{UNKNOWN_PTS_TEAM_WIN} لكل محقق")
+            if correct_voters:
+                point_lines.append(
+                    f"🎯 صوّتوا صح (+{UNKNOWN_PTS_CORRECT_VOTE}): "
+                    + "، ".join(_unknown_public_name(players[v]) for v in correct_voters)
+                )
             result_text = (
                 "🏆 فريق التحقيق فاز!\n"
-                f"تم كشف أحد المتلاعبين: {session['players'].get(top_targets[0], {}).get('name', 'المتهم')}.\n\n"
-                "ياسمين أكدت أن الأدلة قادت للمسؤول الحقيقي."
+                f"اتكشف المتلاعب: {_unknown_public_name(players[top_targets[0]])} 🕶️"
             )
         else:
             winner = "saboteur"
+            for uid in culprit_ids:
+                award[uid] += UNKNOWN_PTS_SABOTEUR_WIN
+            point_lines.append(f"🕶️ المتلاعب نجا: +{UNKNOWN_PTS_SABOTEUR_WIN} للمتلاعبين")
             result_text = (
                 "🕶️ المتلاعب فاز هذه المرة!\n"
-                f"فريق المتلاعبين الحقيقي: {culprit_names}.\n\n"
-                "نجح في تضليل التحقيق أو الهروب من التصويت."
+                "نجح يخدعكم كلكم... أو الأصوات اتعادلت 😏"
             )
-        if caught:
-            for voter_id, target in votes.items():
-                if str(target) in culprit_ids and voter_id in session["players"]:
-                    session["players"][voter_id]["score"] = int(session["players"][voter_id].get("score", 0)) + 5
+
+        accusations = session.get("accusations", [])
+        hit_accusers = []
+        for acc in accusations:
+            a_id, t_id = acc.get("a"), acc.get("t")
+            if t_id in culprit_set and a_id in players and a_id not in culprit_set and a_id not in hit_accusers:
+                hit_accusers.append(a_id)
+        for a_id in hit_accusers:
+            award[a_id] += UNKNOWN_PTS_CORRECT_ACCUSE
+        if hit_accusers:
+            point_lines.append(
+                f"🔥 اتهام علني صح (+{UNKNOWN_PTS_CORRECT_ACCUSE}): "
+                + "، ".join(_unknown_public_name(players[a]) for a in hit_accusers)
+            )
+        frames = min(
+            sum(1 for acc in accusations if acc.get("t") not in culprit_set),
+            UNKNOWN_PTS_FRAME_CAP,
+        ) * UNKNOWN_PTS_FRAME
+        if frames:
+            for uid in culprit_ids:
+                award[uid] += frames
+            point_lines.append(f"😈 اتهامات ضد أبرياء ضللت الناس: +{frames} للمتلاعبين")
+
+        for uid, pts in award.items():
+            if uid in players:
+                players[uid]["score"] = int(players[uid].get("score", 0)) + pts
+
+        for alliance in session.get("alliances", []):
+            a_id, b_id = alliance.get("a"), alliance.get("b")
+            if alliance.get("status") != "accepted" or a_id not in players or b_id not in players:
+                continue
+            a_c, b_c = a_id in culprit_set, b_id in culprit_set
+            if caught and (a_c != b_c):
+                victim = b_id if a_c else a_id
+                traitor = a_id if a_c else b_id
+                players[victim]["score"] = max(0, int(players[victim].get("score", 0)) - UNKNOWN_PTS_ALLIANCE)
+                point_lines.append(
+                    f"😂 {_unknown_public_name(players[victim])} اتحالف مع المتلاعب "
+                    f"{_unknown_public_name(players[traitor])}: -{UNKNOWN_PTS_ALLIANCE}"
+                )
+            elif not (a_c and b_c):
+                for ally_id in (a_id, b_id):
+                    players[ally_id]["score"] = int(players[ally_id].get("score", 0)) + UNKNOWN_PTS_ALLIANCE
+                point_lines.append(
+                    f"🤝 تحالف {_unknown_public_name(players[a_id])} و{_unknown_public_name(players[b_id])}: +{UNKNOWN_PTS_ALLIANCE} لكل واحد"
+                )
+
+        vote_lines = []
+        for uid, count in sorted(counts.items(), key=lambda item: item[1], reverse=True):
+            vote_lines.append(f"• {_unknown_public_name(players.get(uid, {}))}: {count} صوت")
+        vote_summary = "\n".join(vote_lines) if vote_lines else "مافي أصوات مسجلة."
+
+        reveal_lines = []
+        for uid in player_ids:
+            target = votes.get(uid)
+            voter_name = _unknown_public_name(players[uid])
+            if target and str(target) in players:
+                reveal_lines.append(f"• {voter_name} ← {_unknown_public_name(players[str(target)])}")
+            else:
+                reveal_lines.append(f"• {voter_name} ← ما صوّت")
+        reveal_text = "\n".join(reveal_lines)
+
+        top_player = max(players.values(), key=lambda p: int(p.get("score", 0)))
+        champion_line = f"🏆 بطل التحقيق: {_unknown_public_name(top_player)} ({int(top_player.get('score', 0))} نقطة)"
+
         session["status"] = "finished"
         session["phase"] = "finished"
         session["winner"] = winner
@@ -1585,9 +1794,12 @@ async def _unknown_resolve_vote(application, chat_id, force=False):
         "win_investigators" if winner == "investigators" else "win_saboteur",
         caption=(
             f"{UNKNOWN_GAME_TITLE}\n\n{result_text}\n\n"
+            f"🎭 المتلاعب كان: {culprit_names}\n\n"
             f"📊 نتيجة التصويت:\n{vote_summary}\n\n"
-            + ("\n".join(alliance_bonus_lines) + "\n\n" if alliance_bonus_lines else "")
-            + f"🏅 الترتيب النهائي:\n{_unknown_scoreboard(session)}\n\n"
+            f"🗳️ مين صوّت لمين (وقت المشاكل 😂):\n{reveal_text}\n\n"
+            f"💰 النقاط:\n" + "\n".join(point_lines) + "\n\n"
+            f"🏅 الترتيب النهائي:\n{_unknown_scoreboard(session)}\n\n"
+            f"{champion_line}\n\n"
             "انتهت القضية. اكتبوا /games لفتح تحقيق جديد."
         ),
     )
@@ -1595,6 +1807,13 @@ async def _unknown_resolve_vote(application, chat_id, force=False):
 
 async def _unknown_timer(application, chat_id, phase, round_no, deadline):
     await asyncio.sleep(max(0, float(deadline) - time.time()))
+    current = _unknown_load(chat_id)
+    if (
+        not current
+        or current.get("status") != "playing"
+        or abs(float(current.get("deadline", 0)) - float(deadline)) > 1.0
+    ):
+        return  # timer belongs to an older game or an already-finished phase
     if phase == "actions":
         await _unknown_resolve_round(application, chat_id, round_no, force=True)
     elif phase == "vote":
@@ -1637,6 +1856,11 @@ async def restore_unknown_game_timers(application):
         print(f"[UNKNOWN TIMER RESTORE ERROR] {type(exc).__name__}: {exc}")
 
 
+def _unknown_should_announce(count, total):
+    """Avoid flooding the group (Telegram limits ~20 msgs/min per group) in big games."""
+    return total <= 8 or count >= total or count % max(1, total // 4) == 0
+
+
 async def handle_unknown_action(update, context, chat_id, round_token, action):
     q = update.callback_query
     uid = str(update.effective_user.id)
@@ -1674,21 +1898,17 @@ async def handle_unknown_action(update, context, chat_id, round_token, action):
         used_actions.append(action)
         should_resolve = len(session["actions"]) >= len(session["players"])
         public_name = _unknown_public_name(session["players"][uid])
-        public_action = (
-            UNKNOWN_ACTIONS.get(action, "راجع ملف القضية")
-            if role != "المتلاعب" else "🕶️ تحرك سري داخل ملف الأدلة"
-        )
         action_count = len(session["actions"])
         total_players = len(session["players"])
         _unknown_save(session)
-    await q.answer("تم تسجيل تحركك. ياسمين أعلنت ملخصه في القروب. 🔐")
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(f"📡 تحديث مباشر — المرحلة {round_no}\n"
-              f"{public_name} نفّذ: {public_action}\n"
-              f"📊 التحركات المسجلة: {action_count}/{total_players}\n"
-              "الأدوار السرية ما زالت مخفية عن الجمهور."),
-    )
+    await q.answer("تم تسجيل تحركك 🔐 وقرينتك حتوصلك بعد المرحلة.")
+    # نص موحد لكل اللاعبين: ما في أي تلميح عن الدور
+    if _unknown_should_announce(action_count, total_players):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(f"📡 المرحلة {round_no}: {public_name} سجّل تحركه السري 🔐\n"
+                  f"📊 التحركات: {action_count}/{total_players}"),
+        )
     if should_resolve:
         await _unknown_resolve_round(context.application, chat_id, round_no)
 
@@ -1710,6 +1930,9 @@ async def handle_unknown_vote(update, context, chat_id, target_id):
         if target_id not in session["players"]:
             await q.answer("المشتبه فيه غير موجود.", show_alert=True)
             return
+        if target_id == uid:
+            await q.answer("ما بتصوّت لنفسك 😄", show_alert=True)
+            return
         if time.time() > float(session.get("deadline", 0)):
             await q.answer("انتهى زمن التصويت.", show_alert=True)
             return
@@ -1723,12 +1946,59 @@ async def handle_unknown_vote(update, context, chat_id, target_id):
         total_players = len(session["players"])
         _unknown_save(session)
     await q.answer("تم تسجيل تصويتك بسرية. 🗳️")
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"🗳️ {voter_name} سجّل تصويته السري. ({vote_count}/{total_players})",
-    )
+    if _unknown_should_announce(vote_count, total_players):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🗳️ {voter_name} سجّل تصويته السري. ({vote_count}/{total_players})",
+        )
     if should_resolve:
         await _unknown_resolve_vote(context.application, chat_id)
+
+
+async def handle_unknown_accuse(update, context, chat_id, round_token, target_id):
+    """اتهام علني: مرة واحدة لكل لاعب في كل مرحلة. يتحاسب في النهاية."""
+    q = update.callback_query
+    uid = str(update.effective_user.id)
+    target_id = str(target_id)
+    lock = UNKNOWN_GAME_ASYNC_LOCKS[chat_id]
+    async with lock:
+        session = _unknown_load(chat_id)
+        if not session or session.get("status") != "playing":
+            await q.answer("الاتهام غير متاح حالياً.", show_alert=True)
+            return
+        if uid not in session["players"]:
+            await q.answer("إنت ما مشارك في التحقيق.", show_alert=True)
+            return
+        if target_id not in session["players"]:
+            await q.answer("المشتبه فيه غير موجود.", show_alert=True)
+            return
+        if target_id == uid:
+            await q.answer("ما بتتهم نفسك 😄", show_alert=True)
+            return
+        try:
+            token = int(round_token)
+        except ValueError:
+            await q.answer("زر اتهام غير صحيح.", show_alert=True)
+            return
+        if session.get("accuse_round") != token:
+            await q.answer("نافذة الاتهام دي انتهت.", show_alert=True)
+            return
+        accusations = session.setdefault("accusations", [])
+        if any(a.get("r") == token and a.get("a") == uid for a in accusations):
+            await q.answer("اتهمت بالفعل في المرحلة دي.", show_alert=True)
+            return
+        accusations.append({"r": token, "a": uid, "t": target_id})
+        total_against = sum(1 for a in accusations if a.get("t") == target_id)
+        accuser_name = _unknown_public_name(session["players"][uid])
+        target_name = _unknown_public_name(session["players"][target_id])
+        _unknown_save(session)
+    await q.answer("تم! اتهامك اتعلن في القروب 🔥")
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(f"🔥 {accuser_name} يتهم {target_name} علناً!\n"
+              f"⚖️ عدد الاتهامات ضد {target_name}: {total_against}\n"
+              "لو طلع بريء... فالمتلاعب هو المستفيد 😈"),
+    )
 
 
 async def game_callback_router(update, context):
@@ -1748,14 +2018,15 @@ async def game_callback_router(update, context):
         await _unknown_send_media(context.bot, q.message.chat_id, "tutorial", caption="📖 دليل سريع قبل دخول التحقيق")
         await q.edit_message_text(
             "📖 كيف تلعب YASMINE: THE UNKNOWN؟\n\n"
-            "1️⃣ افتح تحقيقاً جماعياً في القروب، وبعدها انضم من الزر.\n"
-            "2️⃣ افتح الخاص مع ياسمين من زر (تفعيل الخاص)؛ بدون الخطوة دي ما حتستلم دورك السري.\n"
-            "3️⃣ أي لاعب يقدر يطلب البداية؛ ما في قائد أو صلاحيات خاصة لصاحب إنشاء اللعبة.\n"
-            "4️⃣ ياسمين توزع الأدوار حسب عدد المشاركين، ومافي حد أقصى ثابت.\n"
-            "5️⃣ عندك 3 مراحل سريعة. في كل مرحلة تختار تحركاً واحداً من الخاص.\n"
-            "6️⃣ القرائن بتظهر في القروب، وبعدها كل لاعب يصوّت سراً على المشتبه فيه.\n"
-            "7️⃣ لو انكشف المتلاعب، فريق التحقيق يفوز؛ ولو ضلّل الجميع، هو يفوز.\n\n"
-            "ياسمين هي مديرة اللعبة من البداية للنهاية. 🕯️",
+            f"1️⃣ افتح تحقيق في القروب وانضم ({UNKNOWN_MIN_PLAYERS} لاعبين على الأقل، {UNKNOWN_MAX_PLAYERS} كحد أقصى).\n"
+            "2️⃣ كل لاعب يفعّل الخاص من الزر عشان يستلم دوره السري.\n"
+            "3️⃣ فيكم 🕶️ متلاعب مخفي، والباقي محققين.\n"
+            f"4️⃣ {UNKNOWN_ROUNDS} مراحل: في كل مرحلة تختار تحرك من الخاص وتستلم قرينة سرية (ممكن تكون صحيحة أو مضللة).\n"
+            "5️⃣ ياسمين تنشر القرينة الرسمية في القروب. اتناقشوا، كذّبوا، واتهموا بعض علناً بزر 🔥.\n"
+            "6️⃣ بعد المرحلة الأخيرة: تصويت سري. لو أكثر الأصوات طلعت على المتلاعب، فريق التحقيق يفوز. تعادل = المتلاعب يفوز.\n\n"
+            f"💰 النقاط: تصويت صح +{UNKNOWN_PTS_CORRECT_VOTE} • اتهام علني صح +{UNKNOWN_PTS_CORRECT_ACCUSE} • "
+            f"تحدي +{UNKNOWN_PTS_CHALLENGE_WIN} • تحالف +{UNKNOWN_PTS_ALLIANCE} • المتلاعب لو نجا +{UNKNOWN_PTS_SABOTEUR_WIN}\n"
+            "🏆 أعلى نقاط في الآخر = بطل التحقيق!",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎯 جرّب تدريباً", callback_data="games:practice")],
                 [InlineKeyboardButton("⬅️ رجوع", callback_data="games:back")],
@@ -1826,6 +2097,8 @@ async def game_callback_router(update, context):
             await handle_unknown_action(update, context, chat_id, parts[3], parts[4])
         elif action == "vote" and len(parts) == 4:
             await handle_unknown_vote(update, context, chat_id, parts[3])
+        elif action == "acc" and len(parts) == 5:
+            await handle_unknown_accuse(update, context, chat_id, parts[3], parts[4])
         elif action in ("challenge", "ally") and len(parts) == 4:
             await _unknown_create_social_request(update, context, chat_id, parts[3], action)
         elif action in ("socialyes", "socialno") and len(parts) == 4:
