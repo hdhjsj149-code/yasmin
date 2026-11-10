@@ -5133,11 +5133,10 @@ async def handle_message(
             "ياسمين" in user_text
             or f"@{bot_username}".lower() in text_lower
         )
-        is_voice_message = bool(update.message.voice or update.message.audio)
-
-        # اسمحي بمعالجة الريكوردات في القروبات المعتمدة؛ لا يوجد نص
-        # داخل رسالة الصوت يمكن فحصه قبل تحويله إلى كتابة.
-        if not is_reply_to_bot and not has_trigger and not is_voice_message:
+        # في القروبات لا نعالج أي رسالة صوتية إلا لو كانت رداً
+        # على رسالة من ياسمين، أو معها كابشن فيه نداء صريح لياسمين.
+        # الرسائل الصوتية العادية المرسلة بين الأعضاء يتم تجاهلها.
+        if not is_reply_to_bot and not has_trigger:
             return
 
         # عدّ فقط الرسائل التي وصلت فعلاً للبوت.
