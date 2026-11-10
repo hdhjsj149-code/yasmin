@@ -3431,7 +3431,7 @@ def ask_openrouter(system_prompt, conversation_history):
 YASMINE_TTS_VOICE = os.environ.get(
     "YASMINE_TTS_VOICE", "ar-SA-ZariyahNeural"
 ).strip()
-YASMINE_TTS_RATE = "0%"
+YASMINE_TTS_RATE = os.environ.get("YASMINE_TTS_RATE", "+0%").strip()
 YASMINE_TTS_PITCH = os.environ.get("YASMINE_TTS_PITCH", "+0Hz").strip()
 
 
@@ -5671,21 +5671,25 @@ Username:
     )
 
     # ========================================================
-    # Voice
+    # ========================================================
+    # Voice: detect requests reliably and send an actual voice reply
     # ========================================================
 
-    voice_request_text = re.sub(r"[إأآا]", "ا", user_text.lower())
-    wants_voice = (
-        is_incoming_voice
-        or any(
-            phrase in voice_request_text
-            for phrase in (
-                "ريكورد", "ريكو", "فويس", "فويس نوت",
-                "رساله صوتيه", "رسالة صوتية", "صوت",
-                "سجل لي", "سجلي لي", "اديني تسجيل",
-                "اعمل تسجيل", "اتكلمي", "ارسلي صوت"
-            )
-        )
+    voice_request_text = str(user_text or "").lower()
+    voice_request_text = re.sub(r"[إأآ]", "ا", voice_request_text)
+    voice_request_text = re.sub(r"[ًٌٍَُِّْـ]", "", voice_request_text)
+    voice_request_text = re.sub(r"\\s+", " ", voice_request_text).strip()
+
+    voice_phrases = (
+        "ريكورد", "ريكو", "فويس", "فويس نوت",
+        "رساله صوتيه", "رسالة صوتية", "صوت",
+        "سجل لي", "سجلي لي", "اديني تسجيل",
+        "اديني ريكورد", "اعمل تسجيل", "اعملي تسجيل",
+        "اتكلمي", "ارسلي صوت", "ارسل صوت",
+        "ردي صوت", "رد صوت", "بالصوت",
+    )
+    wants_voice = is_incoming_voice or any(
+        phrase in voice_request_text for phrase in voice_phrases
     )
 
     if wants_voice:
@@ -5695,34 +5699,26 @@ Username:
                 action=ChatAction.RECORD_VOICE
             )
         except Exception as e:
-            print(
-                f"[VOICE ACTION ERROR]: {e}"
-            )
+            print(f"[VOICE ACTION ERROR]: {type(e).__name__}: {e}")
 
-        voice_io = await text_to_live_voice(
-            reply_result
-        )
+        voice_io = await text_to_live_voice(reply_result)
 
         if voice_io:
-            caption = (
-                "اتفضل يا مبرمجي"
-                if is_admin
-                else "اتفضل الرد الصوتي"
-            )
+            caption = "اتفضل يا مبرمجي" if is_admin else "اتفضل الرد الصوتي"
             try:
                 voice_io.seek(0)
-                # Edge TTS ينتج MP3؛ نرسله كرسالة صوتية أولاً.
+                # Keep the same Telegram voice-send method used by the known-working file.
                 await update.message.reply_voice(
                     voice=voice_io,
                     caption=caption
                 )
                 return
-            except Exception as e:
+            except Exception as voice_error:
                 print(
                     f"[SEND VOICE ERROR]: "
-                    f"{type(e).__name__}: {e}"
+                    f"{type(voice_error).__name__}: {voice_error}"
                 )
-                # احتياط: لو رفض Telegram صيغة voice، أرسلي نفس الملف كصوت عادي.
+                # Fallback only if Telegram rejects the voice upload.
                 try:
                     voice_io.seek(0)
                     await update.message.reply_audio(
@@ -5738,8 +5734,8 @@ Username:
                     )
         else:
             print(
-                "[VOICE FALLBACK] لم يتم إنشاء الملف الصوتي؛ "
-                "سيتم إرسال الرد كتابة. افحص تثبيت edge-tts واتصال الشبكة."
+                "[VOICE FALLBACK] TTS returned no audio. "
+                "Check edge-tts installation, network access and voice settings."
             )
 
     # ========================================================
